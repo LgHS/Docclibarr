@@ -1,0 +1,13 @@
+{
+	"name": "lghs/docclibarr",
+	"description": "Ingestion des factures électroniques Doccle (Peppol/UBL) reçues par email dans Dolibarr",
+	"type": "dolibarr-module",
+	"license": "GPL-3.0-or-later",
+	"require": {
+		"php": ">=7.2",
+		"google/apiclient": "^2.15"
+	},
+	"require-dev": {
+		"phpunit/phpunit": "^9.6"
+	}
+}

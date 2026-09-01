@@ -22,9 +22,10 @@ Docclibarr est un module à part entière, distinct du module d'**import bancair
 
 ## Prérequis (prévisionnel)
 
-- Dolibarr 22.x ou supérieur (à confirmer sur l'instance cible).
+- Dolibarr 22.x.
 - PHP 7.2 ou supérieur.
-- Un compte Gmail/Google Workspace dédié avec accès API activé (OAuth2). Un support IMAP pourrait être envisagé plus tard, en alternative ou en complément, pour couvrir une boîte mail hébergée ailleurs que sur Google Workspace.
+- Un compte Gmail/Google Workspace dédié avec l'API Gmail activée (OAuth2 utilisateur classique, scope lecture seule). Un support IMAP pourrait être envisagé plus tard, en alternative ou en complément, pour couvrir une boîte mail hébergée ailleurs que sur Google Workspace.
+- Composer, pour la librairie cliente Gmail officielle (`google/apiclient`). Contrairement à DoliFius qui n'a aucune dépendance externe, ce module en introduit une, rendue nécessaire par l'API Gmail.
 
 ## Roadmap
 

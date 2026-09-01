@@ -12,6 +12,9 @@ NOTES_*.md
 vendor/
 composer.lock
 
+# Cache PHPUnit
+.phpunit.result.cache
+
 # Secrets / identifiants (tokens OAuth Gmail, etc. — ne doivent jamais être commités)
 .env
 *.env

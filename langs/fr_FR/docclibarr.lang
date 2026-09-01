@@ -1,0 +1,30 @@
+# Copyright (C) 2026 iooner.io for Liège Hackerspace
+# Fichier de langue français du module Docclibarr
+
+Module109501Name = Docclibarr
+Module109501Desc = Ingestion des factures électroniques Doccle (Peppol/UBL) reçues par email
+
+DocclibarrArea = Factures électroniques Doccle
+DocclibarrList = Factures électroniques reçues
+DocclibarrSupplier = Fournisseur
+DocclibarrInvoiceNumber = N° facture
+DocclibarrAmountTTC = Montant TTC
+DocclibarrOriginStatus = Origine
+DocclibarrOriginVerified = Vérifiée
+DocclibarrOriginQuarantine = En quarantaine
+DocclibarrMatchStatus = Statut
+DocclibarrMatchStatusQuarantine = En quarantaine
+DocclibarrMatchStatusPending = En attente
+DocclibarrMatchStatusAutoMatched = Proposition automatique
+DocclibarrMatchStatusUnmatched = Non rapproché
+DocclibarrMatchStatusValidated = Validé
+DocclibarrMatchStatusRejected = Rejeté
+DocclibarrMatchConfidence = Confiance
+DocclibarrValidate = Valider
+DocclibarrReject = Rejeter
+DocclibarrRejectionReason = Motif du rejet
+DocclibarrSetupPage = Configuration Docclibarr
+DocclibarrMailboxAddress = Adresse de la boîte mail dédiée
+DocclibarrGmailClientId = Identifiant client OAuth Gmail
+DocclibarrGmailClientSecret = Secret client OAuth Gmail
+DocclibarrGmailRefreshToken = Refresh token Gmail
