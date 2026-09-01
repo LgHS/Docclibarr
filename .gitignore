@@ -1,0 +1,28 @@
+# Spec de travail détaillée, local uniquement, voir README.md pour le suivi public
+SPEC.md
+NOTES_*.md
+
+# IDE
+.vscode
+.idea
+*.code-workspace
+.claude
+
+# Dépendances (si une lib externe est ajoutée, ex. client Gmail API)
+vendor/
+composer.lock
+
+# Secrets / identifiants (tokens OAuth Gmail, etc. — ne doivent jamais être commités)
+.env
+*.env
+credentials.json
+token.json
+*.pem
+*.key
+
+# Fixtures de test contenant des données réelles non anonymisées
+*.eml
+!tests/fixtures/**/*.eml
+
+# OS
+.DS_Store
