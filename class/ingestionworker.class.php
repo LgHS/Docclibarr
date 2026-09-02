@@ -21,21 +21,24 @@ require_once __DIR__.'/originverifier.class.php';
 require_once __DIR__.'/mimeattachmentextractor.class.php';
 require_once __DIR__.'/ublinvoiceparser.class.php';
 require_once __DIR__.'/facturationelectroniquestaging.class.php';
+require_once __DIR__.'/invoicematcher.class.php';
 
 /**
  * Orchestre l'ingestion complète (voir SPEC.md section 3 et 4) : appelée par le cron de
  * secours (voir modDocclibarr.class.php, $this->cronjobs) ou par la notification Pub/Sub
  * quand elle sera implémentée. Enchaîne Gmail -> OriginVerifier -> MimeAttachmentExtractor
- * -> UblInvoiceParser -> stockage ECM + enregistrement de staging.
+ * -> UblInvoiceParser -> InvoiceMatcher -> stockage ECM + enregistrement de staging.
  *
- * AVERTISSEMENT : le stockage ECM (createEcmFile) suit le pattern Dolibarr standard
- * (EcmFiles::create()) mais n'a pas pu être vérifié contre une instance Dolibarr réelle
- * (DoliFius ne fait pas ce genre de stockage). À tester en priorité en couche 3 (voir
- * SPEC.md section 14) avant tout usage sur de vraies factures.
+ * AVERTISSEMENT : le stockage ECM (storeEcmFile) et la requête de candidats
+ * (InvoiceMatcher::findCandidates) suivent le pattern Dolibarr standard mais n'ont pas pu
+ * être vérifiés contre une instance Dolibarr réelle (DoliFius ne fait ni l'un ni l'autre).
+ * À tester en priorité en couche 3 (voir SPEC.md section 14) avant tout usage sur de
+ * vraies factures.
  *
- * Phase 1 uniquement : aucune logique de matching ici (voir SPEC.md section 15), chaque
- * message accepté est simplement mis en staging avec le statut "pending". Le moteur de
- * matching (phase 2) travaillera sur ces enregistrements séparément.
+ * Le score du matching ne sert qu'à trier et pré-remplir le dashboard (voir SPEC.md
+ * section 8 et 12) : aucun rattachement définitif n'est appliqué ici, y compris en cas de
+ * correspondance de niveau 1. La validation humaine (docclibarr/card.php) reste
+ * obligatoire dans tous les cas.
  */
 class IngestionWorker
 {
@@ -50,6 +53,12 @@ class IngestionWorker
 
 	/** @var int Nombre de messages ignorés car déjà en staging (email_message_id déjà vu) */
 	public $skippedDuplicatesCount = 0;
+
+	/**
+	 * @var int Nombre de messages totalement hors sujet, ignorés sans mise en staging (voir
+	 *          OriginVerifier::isCompletelyUnrelated() et processMessage())
+	 */
+	public $ignoredCount = 0;
 
 	/**
 	 * @param DoliDB $db Database handler
@@ -72,6 +81,7 @@ class IngestionWorker
 		$this->errors = array();
 		$this->processedCount = 0;
 		$this->skippedDuplicatesCount = 0;
+		$this->ignoredCount = 0;
 
 		$mailboxAddress = $conf->global->DOCCLIBARR_MAILBOX_ADDRESS ?? '';
 		$clientId = $conf->global->DOCCLIBARR_GMAIL_CLIENT_ID ?? '';
@@ -122,6 +132,21 @@ class IngestionWorker
 			return;
 		}
 
+		$verifier = new OriginVerifier();
+		$originVerified = $verifier->verify($rawEml, 'doccle.be');
+
+		// Message totalement hors sujet (aucune des trois vérifications ne passe, voir
+		// OriginVerifier::isCompletelyUnrelated()) : décision explicite du 2026-09-02, ne
+		// pas le mettre en staging ni conserver son .eml, uniquement une ligne de log
+		// standard Dolibarr (expéditeur + objet), pour ne pas faire remonter tout le bruit
+		// de la boîte comme s'il s'agissait de tentatives d'usurpation à examiner. Le
+		// message reste par ailleurs consultable directement dans Gmail si besoin.
+		if (!$originVerified && $verifier->isCompletelyUnrelated()) {
+			$this->logIgnoredMessage($rawEml);
+			$this->ignoredCount++;
+			return;
+		}
+
 		$staging = new FacturationElectroniqueStaging($this->db);
 		$staging->email_message_id = $messageId;
 		$staging->email_received_at = dol_now();
@@ -131,12 +156,12 @@ class IngestionWorker
 		$staging->sender_domain = $fromDomain !== null ? $fromDomain : '';
 
 		// Conserve le .eml brut complet pour audit, y compris pour les messages rejetés
-		// en quarantaine (voir SPEC.md section 4).
+		// en quarantaine (voir SPEC.md section 4) : contrairement au cas ci-dessus, ce
+		// message a au moins un signal de légitimité (voir isCompletelyUnrelated()), donc
+		// mérite une revue humaine complète plutôt qu'une simple ligne de log.
 		$emlEcmFileId = $this->storeEcmFile($rawEml, $messageId.'.eml', 'message/rfc822');
 		$staging->eml_ecm_file_id = $emlEcmFileId;
 
-		$verifier = new OriginVerifier();
-		$originVerified = $verifier->verify($rawEml, 'doccle.be');
 		$staging->origin_verified = $originVerified ? 1 : 0;
 
 		if (!$originVerified) {
@@ -196,11 +221,36 @@ class IngestionWorker
 		$staging->payment_ref_normalized = $data['payment_ref_normalized'];
 		$staging->payee_iban = $data['payee_iban'];
 
-		// La TVA client est stockée telle quelle : la comparaison avec le numéro de TVA
-		// de l'entreprise (garde-fou anti-usurpation, voir SPEC.md section 6, 12 et 13)
-		// est laissée au moteur de matching de la phase 2, absent en phase 1 (voir
-		// SPEC.md section 15). Pas de logique de rapprochement ici volontairement.
-		$staging->match_status = FacturationElectroniqueStaging::STATUS_PENDING;
+		// Garde-fou anti-usurpation (voir SPEC.md section 6, 12 et 13) : si la TVA client
+		// du XML ne correspond pas au numéro de TVA de l'entreprise, le message est
+		// signalé comme suspect et JAMAIS soumis au moteur de matching, même si l'origine
+		// du mail est par ailleurs vérifiée. Pas de colonne dédiée dans le schéma pour ce
+		// signal, réutilise match_confidence à 'suspect' (même logique de réutilisation de
+		// champ que DoliFius sur num_chq, voir la mémoire
+		// reference_dolifius_dolibarr_conventions).
+		global $mysoc;
+		$ownVat = isset($mysoc) ? InvoiceMatcher::normalizeVat($mysoc->tva_intra) : null;
+		$customerVat = InvoiceMatcher::normalizeVat($data['customer_vat']);
+
+		if ($ownVat !== null && $customerVat !== $ownVat) {
+			$staging->match_status = FacturationElectroniqueStaging::STATUS_UNMATCHED;
+			$staging->match_confidence = 'suspect';
+			$this->createStagingRecord($staging, $user);
+			return;
+		}
+
+		$matcher = new InvoiceMatcher();
+		$candidates = $staging->supplier_vat !== null ? $matcher->findCandidates($this->db, $staging->supplier_vat) : array();
+		$matchResult = $matcher->match($data, $candidates);
+
+		if ($matchResult !== null) {
+			$staging->match_status = FacturationElectroniqueStaging::STATUS_AUTO_MATCHED;
+			$staging->match_confidence = $matchResult['confidence'];
+			$staging->matched_object_type = 'invoice_supplier';
+			$staging->matched_object_id = $matchResult['candidate_id'];
+		} else {
+			$staging->match_status = FacturationElectroniqueStaging::STATUS_UNMATCHED;
+		}
 
 		$this->createStagingRecord($staging, $user);
 	}
@@ -251,6 +301,32 @@ class IngestionWorker
 		}
 
 		return null;
+	}
+
+	/**
+	 * Journalise un message totalement hors sujet (voir OriginVerifier::isCompletelyUnrelated())
+	 * dans le log standard Dolibarr, sans stocker le .eml ni créer d'enregistrement de
+	 * staging. Décision explicite du 2026-09-02 : garder une trace minimale (expéditeur +
+	 * objet) plutôt que rien du tout, sans pour autant faire remonter tout le bruit de la
+	 * boîte comme une tentative d'usurpation à examiner.
+	 *
+	 * @param string $rawEml
+	 */
+	protected function logIgnoredMessage($rawEml)
+	{
+		$headerBlock = substr($rawEml, 0, strpos($rawEml, "\r\n\r\n") ?: strlen($rawEml));
+
+		$from = '(expéditeur illisible)';
+		if (preg_match('/^from:\s*(.+)$/mi', $headerBlock, $m)) {
+			$from = trim($m[1]);
+		}
+
+		$subject = '(objet illisible)';
+		if (preg_match('/^subject:\s*(.+)$/mi', $headerBlock, $m)) {
+			$subject = trim($m[1]);
+		}
+
+		dol_syslog("Docclibarr: message ignoré (hors sujet, origine non liée à Doccle) - From: ".$from." - Subject: ".$subject, LOG_INFO);
 	}
 
 	/**

@@ -1,0 +1,266 @@
+<?php
+/* Copyright (C) 2026 iooner.io for Liège Hackerspace
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ */
+/**
+ * Fiche détail d'un enregistrement de staging (voir SPEC.md section 11) : affiche la
+ * proposition de rattachement du moteur de matching et expose les quatre actions
+ * possibles, toutes soumises à une confirmation humaine explicite (voir SPEC.md
+ * section 8 et 12, rien n'est jamais appliqué automatiquement, y compris niveau 1) :
+ * valider la proposition telle quelle, rattacher manuellement un autre objet, créer un
+ * brouillon de facture fournisseur, ou rejeter avec motif.
+ *
+ * AVERTISSEMENT : la création de facture fournisseur (FactureFournisseur::create()) et
+ * le re-rattachement des documents ECM à l'objet validé n'ont pas pu être vérifiés
+ * contre une instance Dolibarr réelle, voir SPEC.md section 14 (couche 3). À tester
+ * prioritairement avec des tiers et montants factices avant tout usage réel.
+ */
+
+$res = 0;
+$tmpDir = __DIR__.'/..';
+$depthTry = 0;
+while ($depthTry < 5 && !$res) {
+	if (file_exists($tmpDir.'/main.inc.php')) {
+		$res = @include $tmpDir.'/main.inc.php';
+	}
+	$tmpDir .= '/..';
+	$depthTry++;
+}
+if (!$res) {
+	die("Impossible de trouver main.inc.php de Dolibarr");
+}
+
+require_once __DIR__.'/../class/facturationelectroniquestaging.class.php';
+require_once DOL_DOCUMENT_ROOT.'/fourn/class/fournisseur.facture.class.php';
+require_once DOL_DOCUMENT_ROOT.'/societe/class/societe.class.php';
+require_once DOL_DOCUMENT_ROOT.'/core/class/ecmfiles.class.php';
+
+global $langs, $user, $conf, $db;
+
+$langs->loadLangs(array('docclibarr@docclibarr', 'bills', 'companies'));
+
+if (!$user->rights->docclibarr->read) {
+	accessforbidden();
+}
+
+$id = GETPOST('id', 'int');
+$action = GETPOST('action', 'aZ09');
+
+$staging = new FacturationElectroniqueStaging($db);
+if ($id <= 0 || $staging->fetch($id) <= 0) {
+	llxHeader('', $langs->trans("DocclibarrArea"));
+	print '<div class="error">'.$langs->trans("ErrorRecordNotFound").'</div>';
+	llxFooter();
+	exit;
+}
+
+$alreadyProcessed = in_array($staging->match_status, array(
+	FacturationElectroniqueStaging::STATUS_VALIDATED,
+	FacturationElectroniqueStaging::STATUS_REJECTED,
+), true);
+
+/**
+ * Re-rattache les documents ECM de l'enregistrement de staging à l'objet Dolibarr
+ * validé (voir SPEC.md section 7 et 10 : le rattachement définitif ne se fait qu'après
+ * validation humaine, jamais avant).
+ *
+ * @param DoliDB $db
+ * @param FacturationElectroniqueStaging $staging
+ * @param string $objectType Ex: 'invoice_supplier'
+ * @param int    $objectId
+ */
+function docclibarr_relink_ecm_files($db, $staging, $objectType, $objectId)
+{
+	foreach (array($staging->pdf_ecm_file_id, $staging->xml_ecm_file_id) as $ecmFileId) {
+		if (empty($ecmFileId)) {
+			continue;
+		}
+
+		$ecmfile = new EcmFiles($db);
+		if ($ecmfile->fetch($ecmFileId) <= 0) {
+			continue;
+		}
+
+		$ecmfile->src_object_type = $objectType;
+		$ecmfile->src_object_id = $objectId;
+		$ecmfile->update($user);
+	}
+}
+
+if ($action === 'validate_proposal' && !$alreadyProcessed) {
+	if (!$user->rights->docclibarr->validate) {
+		accessforbidden();
+	}
+	if (empty($staging->matched_object_id) || empty($staging->matched_object_type)) {
+		setEventMessages("Aucune proposition à valider", null, 'errors');
+	} else {
+		$result = $staging->markValidated($user, $staging->matched_object_type, $staging->matched_object_id);
+		if ($result > 0) {
+			docclibarr_relink_ecm_files($db, $staging, $staging->matched_object_type, $staging->matched_object_id);
+			setEventMessages($langs->trans("RecordSaved"), null);
+		} else {
+			setEventMessages(implode(' ; ', $staging->errors), null, 'errors');
+		}
+	}
+} elseif ($action === 'manual_attach' && !$alreadyProcessed) {
+	if (!$user->rights->docclibarr->validate) {
+		accessforbidden();
+	}
+	$manualId = GETPOST('supplier_invoice_id', 'int');
+	$targetInvoice = new FactureFournisseur($db);
+	if ($manualId <= 0 || $targetInvoice->fetch($manualId) <= 0) {
+		setEventMessages("Facture fournisseur introuvable (id ".((int) $manualId).")", null, 'errors');
+	} else {
+		$result = $staging->markValidated($user, 'invoice_supplier', $manualId);
+		if ($result > 0) {
+			docclibarr_relink_ecm_files($db, $staging, 'invoice_supplier', $manualId);
+			setEventMessages($langs->trans("RecordSaved"), null);
+		} else {
+			setEventMessages(implode(' ; ', $staging->errors), null, 'errors');
+		}
+	}
+} elseif ($action === 'create_draft' && !$alreadyProcessed) {
+	if (!$user->rights->docclibarr->validate) {
+		accessforbidden();
+	}
+
+	$thirdPartyId = GETPOST('third_party_id', 'int');
+	$thirdParty = new Societe($db);
+
+	if ($thirdPartyId <= 0 || $thirdParty->fetch($thirdPartyId) <= 0) {
+		setEventMessages($langs->trans("DocclibarrCreateDraftMissingThirdParty"), null, 'errors');
+	} else {
+		$newInvoice = new FactureFournisseur($db);
+		$newInvoice->socid = $thirdParty->id;
+		$newInvoice->ref_supplier = $staging->payment_ref_raw !== null ? $staging->payment_ref_raw : $staging->invoice_number;
+		$newInvoice->date = $staging->issue_date !== null ? strtotime($staging->issue_date) : dol_now();
+		$newInvoice->label = "Facture ".$staging->supplier_name." n°".$staging->invoice_number;
+
+		$newInvoiceId = $newInvoice->create($user);
+
+		if ($newInvoiceId <= 0) {
+			setEventMessages(implode(' ; ', $newInvoice->errors), null, 'errors');
+		} else {
+			$result = $staging->markValidated($user, 'invoice_supplier', $newInvoiceId);
+			if ($result > 0) {
+				docclibarr_relink_ecm_files($db, $staging, 'invoice_supplier', $newInvoiceId);
+				setEventMessages($langs->trans("RecordSaved"), null);
+			} else {
+				setEventMessages(implode(' ; ', $staging->errors), null, 'errors');
+			}
+		}
+	}
+} elseif ($action === 'reject' && !$alreadyProcessed) {
+	if (!$user->rights->docclibarr->validate) {
+		accessforbidden();
+	}
+	$reason = GETPOST('rejection_reason', 'restricthtml');
+	$result = $staging->markRejected($user, $reason);
+	if ($result > 0) {
+		setEventMessages($langs->trans("RecordSaved"), null);
+	} else {
+		setEventMessages(implode(' ; ', $staging->errors), null, 'errors');
+	}
+}
+
+// Recharge après une action éventuelle, pour afficher l'état à jour plutôt que celui
+// lu en tout début de page.
+if ($action !== '') {
+	$staging->fetch($id);
+	$alreadyProcessed = in_array($staging->match_status, array(
+		FacturationElectroniqueStaging::STATUS_VALIDATED,
+		FacturationElectroniqueStaging::STATUS_REJECTED,
+	), true);
+}
+
+llxHeader('', $langs->trans("DocclibarrArea"));
+
+print '<a href="'.dol_buildpath('/docclibarr/list.php', 1).'">'.$langs->trans("DocclibarrBackToList").'</a>';
+
+print load_fiche_titre($staging->supplier_name.' - '.$staging->invoice_number, '', 'docclibarr@docclibarr');
+
+if ($alreadyProcessed) {
+	print '<div class="info">'.sprintf($langs->trans("DocclibarrAlreadyProcessed"), $langs->trans('DocclibarrMatchStatus'.ucfirst($staging->match_status === 'validated' ? 'Validated' : 'Rejected'))).'</div>';
+}
+
+print '<table class="border centpercent">';
+print '<tr><td class="titlefield">'.$langs->trans("DocclibarrSupplier").'</td><td>'.dol_escape_htmltag($staging->supplier_name).' ('.dol_escape_htmltag($staging->supplier_vat).')</td></tr>';
+print '<tr><td>'.$langs->trans("DocclibarrInvoiceNumber").'</td><td>'.dol_escape_htmltag($staging->invoice_number).'</td></tr>';
+print '<tr><td>'.$langs->trans("DocclibarrAmountTTC").'</td><td>'.($staging->amount_ttc !== null ? price($staging->amount_ttc) : '').' '.dol_escape_htmltag($staging->currency).'</td></tr>';
+print '<tr><td>Communication</td><td>'.dol_escape_htmltag($staging->payment_ref_raw).'</td></tr>';
+print '<tr><td>IBAN</td><td>'.dol_escape_htmltag($staging->payee_iban).'</td></tr>';
+print '<tr><td>'.$langs->trans("DocclibarrOriginStatus").'</td><td>'.($staging->origin_verified ? $langs->trans("DocclibarrOriginVerified") : $langs->trans("DocclibarrOriginQuarantine")).'</td></tr>';
+print '<tr><td>'.$langs->trans("DocclibarrMatchConfidence").'</td><td>'.($staging->match_confidence !== null ? dol_escape_htmltag($staging->match_confidence) : '').'</td></tr>';
+print '</table>';
+
+// Prévisualisation (voir SPEC.md section 11)
+print '<div class="marginTopOnly">';
+if (!empty($staging->pdf_ecm_file_id)) {
+	print '<a class="button" href="'.dol_buildpath('/docclibarr/document.php', 1).'?id='.((int) $staging->pdf_ecm_file_id).'" target="_blank">'.$langs->trans("DocclibarrDownloadPdf").'</a> ';
+} else {
+	print $langs->trans("DocclibarrNoPdf").' ';
+}
+if (!empty($staging->xml_ecm_file_id)) {
+	print '<a class="button" href="'.dol_buildpath('/docclibarr/document.php', 1).'?id='.((int) $staging->xml_ecm_file_id).'" target="_blank">'.$langs->trans("DocclibarrDownloadXml").'</a>';
+}
+print '</div>';
+
+if (!$alreadyProcessed && $user->rights->docclibarr->validate) {
+	// Action 1 : valider la proposition telle quelle
+	print '<div class="marginTopOnly"><h3>'.$langs->trans("DocclibarrProposedMatch").'</h3>';
+	if (!empty($staging->matched_object_id)) {
+		$proposed = new FactureFournisseur($db);
+		if ($proposed->fetch($staging->matched_object_id) > 0) {
+			print '<p>'.dol_escape_htmltag($proposed->ref).' ('.dol_escape_htmltag($proposed->ref_supplier).', '.price($proposed->total_ttc).')</p>';
+		}
+		print '<form method="POST" action="'.$_SERVER["PHP_SELF"].'?id='.$id.'">';
+		print '<input type="hidden" name="token" value="'.newToken().'">';
+		print '<input type="hidden" name="action" value="validate_proposal">';
+		print '<input type="submit" class="button" value="'.$langs->trans("DocclibarrValidateProposal").'">';
+		print '</form>';
+	} else {
+		print '<p>'.$langs->trans("DocclibarrNoProposal").'</p>';
+	}
+	print '</div>';
+
+	// Action 2 : rattacher manuellement
+	print '<div class="marginTopOnly"><h3>'.$langs->trans("DocclibarrManualAttach").'</h3>';
+	print '<form method="POST" action="'.$_SERVER["PHP_SELF"].'?id='.$id.'">';
+	print '<input type="hidden" name="token" value="'.newToken().'">';
+	print '<input type="hidden" name="action" value="manual_attach">';
+	print $langs->trans("DocclibarrSupplierInvoiceId").' <input type="text" name="supplier_invoice_id" size="10">';
+	print ' <input type="submit" class="button" value="'.$langs->trans("DocclibarrAttach").'">';
+	print '</form></div>';
+
+	// Action 3 : créer un brouillon
+	print '<div class="marginTopOnly"><h3>'.$langs->trans("DocclibarrCreateDraft").'</h3>';
+	print '<form method="POST" action="'.$_SERVER["PHP_SELF"].'?id='.$id.'">';
+	print '<input type="hidden" name="token" value="'.newToken().'">';
+	print '<input type="hidden" name="action" value="create_draft">';
+	print $langs->trans("DocclibarrThirdPartyId").' <input type="text" name="third_party_id" size="10">';
+	print ' <input type="submit" class="button" value="'.$langs->trans("DocclibarrCreate").'">';
+	print '</form></div>';
+
+	// Action 4 : rejeter avec motif
+	print '<div class="marginTopOnly"><h3>'.$langs->trans("DocclibarrRejectAction").'</h3>';
+	print '<form method="POST" action="'.$_SERVER["PHP_SELF"].'?id='.$id.'">';
+	print '<input type="hidden" name="token" value="'.newToken().'">';
+	print '<input type="hidden" name="action" value="reject">';
+	print $langs->trans("DocclibarrRejectionReason").' <input type="text" name="rejection_reason" size="40">';
+	print ' <input type="submit" class="button button-cancel" value="'.$langs->trans("DocclibarrReject").'">';
+	print '</form></div>';
+}
+
+llxFooter();

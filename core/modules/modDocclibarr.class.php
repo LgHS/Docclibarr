@@ -51,7 +51,7 @@ class modDocclibarr extends DolibarrModules
 		$this->editor_name = 'iooner for LgHS';
 		$this->editor_url = 'https://github.com/LgHS/Docclibarr';
 
-		$this->version = '0.1.0';
+		$this->version = '0.2.0';
 
 		$this->const_name = 'MAIN_MODULE_'.strtoupper($this->name);
 

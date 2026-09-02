@@ -42,6 +42,7 @@ rsync -a \
 	--exclude='.DS_Store' \
 	--exclude='build' \
 	--exclude='scripts' \
+	--exclude='docs' \
 	"$REPO_ROOT"/ "$STAGING_DIR"/
 
 echo "Installation des dépendances de production..."

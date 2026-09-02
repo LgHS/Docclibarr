@@ -15,10 +15,9 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 /**
- * Dashboard de validation, phase 1 : liste en lecture seule des factures électroniques
- * en staging (voir SPEC.md section 11 et 15). Aucune action de validation/rejet/
- * rattachement dans cette première version, ça arrive en phase 2 avec le moteur de
- * matching.
+ * Dashboard de validation (voir SPEC.md section 11) : liste des factures électroniques
+ * en staging, avec filtre par statut et lien vers la fiche détail (docclibarr/card.php)
+ * où se font les actions de validation/rattachement/rejet.
  */
 
 $res = 0;
@@ -57,7 +56,8 @@ if ($statusFilter !== '') {
 $records = $staging->fetchAll('DESC', 'email_received_at', 0, 0, $filter);
 
 // Mapping explicite plutôt qu'une transformation de chaîne du statut : plus robuste et
-// plus lisible que de reconstruire une clé de langue à la volée.
+// plus lisible que de reconstruire une clé de langue à la volée (bug déjà rencontré ici
+// une première fois, cette table est la seule source de vérité maintenant).
 $matchStatusLangKeys = array(
 	FacturationElectroniqueStaging::STATUS_QUARANTINE => 'DocclibarrMatchStatusQuarantine',
 	FacturationElectroniqueStaging::STATUS_PENDING => 'DocclibarrMatchStatusPending',
@@ -65,6 +65,14 @@ $matchStatusLangKeys = array(
 	FacturationElectroniqueStaging::STATUS_UNMATCHED => 'DocclibarrMatchStatusUnmatched',
 	FacturationElectroniqueStaging::STATUS_VALIDATED => 'DocclibarrMatchStatusValidated',
 	FacturationElectroniqueStaging::STATUS_REJECTED => 'DocclibarrMatchStatusRejected',
+);
+
+// Même principe pour la confiance : 'high'/'medium'/'suspect' (voir InvoiceMatcher et
+// IngestionWorker), jamais de valeur affichée brute.
+$matchConfidenceLangKeys = array(
+	'high' => 'DocclibarrMatchConfidenceHigh',
+	'medium' => 'DocclibarrMatchConfidenceMedium',
+	'suspect' => 'DocclibarrMatchConfidenceSuspect',
 );
 
 llxHeader('', $langs->trans("DocclibarrArea"));
@@ -75,16 +83,9 @@ print load_fiche_titre($langs->trans("DocclibarrArea"), '', 'docclibarr@doccliba
 print '<form method="GET" action="'.$_SERVER["PHP_SELF"].'">';
 print '<select name="match_status" onchange="this.form.submit()">';
 print '<option value="">'.$langs->trans("All").'</option>';
-foreach (array(
-	FacturationElectroniqueStaging::STATUS_QUARANTINE,
-	FacturationElectroniqueStaging::STATUS_PENDING,
-	FacturationElectroniqueStaging::STATUS_AUTO_MATCHED,
-	FacturationElectroniqueStaging::STATUS_UNMATCHED,
-	FacturationElectroniqueStaging::STATUS_VALIDATED,
-	FacturationElectroniqueStaging::STATUS_REJECTED,
-) as $statusValue) {
+foreach ($matchStatusLangKeys as $statusValue => $langKey) {
 	$selected = ($statusFilter === $statusValue) ? ' selected' : '';
-	print '<option value="'.$statusValue.'"'.$selected.'>'.$langs->trans('DocclibarrMatchStatus'.ucfirst(str_replace('_', '', $statusValue))).'</option>';
+	print '<option value="'.$statusValue.'"'.$selected.'>'.$langs->trans($langKey).'</option>';
 }
 print '</select>';
 print '</form>';
@@ -97,21 +98,31 @@ print '<td class="right">'.$langs->trans("DocclibarrAmountTTC").'</td>';
 print '<td>'.$langs->trans("DocclibarrOriginStatus").'</td>';
 print '<td>'.$langs->trans("DocclibarrMatchStatus").'</td>';
 print '<td>'.$langs->trans("DocclibarrMatchConfidence").'</td>';
+print '<td></td>';
 print '</tr>';
 
-if (is_array($records)) {
+if (is_array($records) && count($records) > 0) {
 	foreach ($records as $record) {
+		$statusLabel = isset($matchStatusLangKeys[$record->match_status])
+			? $langs->trans($matchStatusLangKeys[$record->match_status])
+			: dol_escape_htmltag($record->match_status);
+
+		$confidenceLabel = isset($matchConfidenceLangKeys[$record->match_confidence])
+			? $langs->trans($matchConfidenceLangKeys[$record->match_confidence])
+			: '';
+
 		print '<tr class="oddeven">';
 		print '<td>'.dol_escape_htmltag($record->supplier_name).'</td>';
 		print '<td>'.dol_escape_htmltag($record->invoice_number).'</td>';
 		print '<td class="right">'.($record->amount_ttc !== null ? price($record->amount_ttc) : '').'</td>';
 		print '<td>'.($record->origin_verified ? img_picto('', 'tick').' '.$langs->trans("DocclibarrOriginVerified") : img_warning().' '.$langs->trans("DocclibarrOriginQuarantine")).'</td>';
-		print '<td>'.dol_escape_htmltag($langs->trans('DocclibarrMatchStatus'.ucfirst(str_replace('_', '', $record->match_status)))).'</td>';
-		print '<td>'.dol_escape_htmltag($record->match_confidence).'</td>';
+		print '<td>'.$statusLabel.'</td>';
+		print '<td>'.$confidenceLabel.'</td>';
+		print '<td><a href="'.dol_buildpath('/docclibarr/card.php', 1).'?id='.((int) $record->rowid).'">'.img_picto($langs->trans("Show"), 'view').'</a></td>';
 		print '</tr>';
 	}
 } else {
-	print '<tr><td colspan="6">'.$langs->trans("None").'</td></tr>';
+	print '<tr><td colspan="7">'.$langs->trans("None").'</td></tr>';
 }
 
 print '</table>';

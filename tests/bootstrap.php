@@ -15,3 +15,4 @@
 require_once __DIR__.'/../class/originverifier.class.php';
 require_once __DIR__.'/../class/ublinvoiceparser.class.php';
 require_once __DIR__.'/../class/mimeattachmentextractor.class.php';
+require_once __DIR__.'/../class/invoicematcher.class.php';

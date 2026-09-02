@@ -34,6 +34,17 @@ class OriginVerifier
 	public $errors = array();
 
 	/**
+	 * @var bool Résultat individuel de chaque vérification (voir SPEC.md section 5), exposé
+	 *           séparément pour permettre à l'appelant de distinguer un message totalement
+	 *           hors sujet (les trois échouent) d'un message suspect qui mérite une revue
+	 *           humaine en quarantaine (au moins l'un des trois passe, voir
+	 *           isCompletelyUnrelated() et SPEC.md section 5 et 13).
+	 */
+	public $domainMatches = false;
+	public $dkimPasses = false;
+	public $dmarcPasses = false;
+
+	/**
 	 * Vérifie qu'un message provient authentiquement du domaine attendu.
 	 *
 	 * @param string $rawEmlContent  Contenu brut du .eml (en-têtes + corps, tel que renvoyé
@@ -44,12 +55,16 @@ class OriginVerifier
 	public function verify($rawEmlContent, $expectedDomain)
 	{
 		$this->errors = array();
+		$this->domainMatches = false;
+		$this->dkimPasses = false;
+		$this->dmarcPasses = false;
 		$expectedDomain = strtolower(trim($expectedDomain));
 
 		$headers = $this->parseHeaders($rawEmlContent);
 
 		$fromDomain = $this->extractFromDomain($this->firstHeader($headers, 'from'));
-		if ($fromDomain === null || $fromDomain !== $expectedDomain) {
+		$this->domainMatches = ($fromDomain !== null && $fromDomain === $expectedDomain);
+		if (!$this->domainMatches) {
 			$this->errors[] = "Domaine du From absent ou différent de \"".$expectedDomain."\" (trouvé : \"".($fromDomain !== null ? $fromDomain : '(aucun)')."\")";
 		}
 
@@ -65,17 +80,33 @@ class OriginVerifier
 			return false;
 		}
 
-		$dkimOk = $this->checkDkim($authResults, $expectedDomain);
-		if (!$dkimOk) {
+		$this->dkimPasses = $this->checkDkim($authResults, $expectedDomain);
+		if (!$this->dkimPasses) {
 			$this->errors[] = "Signature DKIM absente ou invalide pour le domaine \"".$expectedDomain."\"";
 		}
 
-		$dmarcOk = $this->checkDmarc($authResults, $expectedDomain);
-		if (!$dmarcOk) {
+		$this->dmarcPasses = $this->checkDmarc($authResults, $expectedDomain);
+		if (!$this->dmarcPasses) {
 			$this->errors[] = "Résultat DMARC absent ou invalide pour le domaine \"".$expectedDomain."\"";
 		}
 
 		return empty($this->errors);
+	}
+
+	/**
+	 * Distingue un message totalement hors sujet (rien ne rattache ce message à Doccle,
+	 * probablement du spam sans rapport plutôt qu'une tentative d'usurpation) d'un message
+	 * suspect qui mérite une revue humaine en quarantaine. À appeler après verify().
+	 *
+	 * Voir SPEC.md section 5 et 13 : seul le second cas part en quarantaine, le premier est
+	 * ignoré silencieusement par le worker d'ingestion (aucun enregistrement de staging créé),
+	 * décision explicite du 2026-09-02 plutôt que de faire remonter tout le bruit de la boîte.
+	 *
+	 * @return bool True si aucune des trois vérifications ne passe
+	 */
+	public function isCompletelyUnrelated()
+	{
+		return !$this->domainMatches && !$this->dkimPasses && !$this->dmarcPasses;
 	}
 
 	/**

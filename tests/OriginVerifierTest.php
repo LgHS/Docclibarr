@@ -116,4 +116,45 @@ class OriginVerifierTest extends TestCase
 
 		$this->assertTrue($result, "Le premier en-tête aurait dû suffire : ".implode(' ; ', $verifier->errors));
 	}
+
+	public function testCompletelyUnrelatedMessageIsFlagged()
+	{
+		// Spam totalement sans rapport avec Doccle : aucune des trois vérifications ne
+		// passe. IngestionWorker doit alors l'ignorer sans le mettre en quarantaine (voir
+		// SPEC.md section 5 et 13, décision du 2026-09-02).
+		$eml = "Authentication-Results: mx.google.com; dkim=fail header.i=@spam-inconnu.example; dmarc=fail header.from=spam-inconnu.example\r\n"
+			."From: Casino en ligne <promo@spam-inconnu.example>\r\n"
+			."\r\n"
+			."Corps.";
+
+		$verifier = new OriginVerifier();
+		$verifier->verify($eml, 'doccle.be');
+
+		$this->assertTrue($verifier->isCompletelyUnrelated());
+	}
+
+	public function testPartialMatchIsNotFlaggedAsCompletelyUnrelated()
+	{
+		// Le domaine du From correspond mais DKIM/DMARC échouent : signal suffisant d'une
+		// possible tentative d'usurpation, doit partir en quarantaine pour revue humaine,
+		// pas être ignoré silencieusement.
+		$eml = "Authentication-Results: mx.google.com; dkim=fail header.i=@doccle.be; dmarc=fail header.from=doccle.be\r\n"
+			."From: Doccle <community@doccle.be>\r\n"
+			."\r\n"
+			."Corps.";
+
+		$verifier = new OriginVerifier();
+		$result = $verifier->verify($eml, 'doccle.be');
+
+		$this->assertFalse($result);
+		$this->assertFalse($verifier->isCompletelyUnrelated());
+	}
+
+	public function testFullyLegitimateMessageIsNotFlaggedAsCompletelyUnrelated()
+	{
+		$verifier = new OriginVerifier();
+		$verifier->verify($this->legitimateEml(), 'doccle.be');
+
+		$this->assertFalse($verifier->isCompletelyUnrelated());
+	}
 }

@@ -6,6 +6,8 @@ Doccle ne propose aucune API pour récupérer les factures reçues par ce canal 
 
 _Une API Doccle aurait réglé ça en un `GET /invoices` et ce module n'existerait pas. Faute de mieux (côté Doccle comme côté logiciels de compta abordables qui proposeraient nativement l'ingestion Peppol), Docclibarr sort l'artillerie lourde (vérification DKIM/DMARC en règle, parsing XPath namespace-aware, moteur de matching en cascade) pour faire à coups de regex et d'en-têtes email ce qu'un vrai point d'accès aurait fait en une requête. Doccle, j'aime votre solution, mais par pitié, une API..._
 
+![On les réconcilie de force](docs/nowkiss.jpg)
+
 Docclibarr est un module à part entière, distinct du module d'**import bancaire** existant [DoliFius](https://github.com/LgHS/DoliFius) : il s'appuie sur les mêmes conventions de code, mais ne modifie pas et ne dépend pas de son code. Les deux modules répondent à la même contrainte de fond (un fournisseur externe sans API, seulement un flux à parser) appliquée à deux sources différentes : les extraits Belfius en CSV pour DoliFius, les factures Peppol/Doccle en email pour Docclibarr.
 
 ## Statut
@@ -29,8 +31,8 @@ Docclibarr est un module à part entière, distinct du module d'**import bancair
 
 ## Roadmap
 
-- [ ] **Phase 1** : Ingestion des emails, vérification d'origine, parsing XML, stockage en table de staging, dashboard en lecture seule.
-- [ ] **Phase 2** : Moteur de matching en cascade, actions de validation humaine dans le dashboard, rattachement définitif aux factures fournisseurs.
+- [x] **Phase 1** : Ingestion des emails, vérification d'origine, parsing XML, stockage en table de staging, dashboard en lecture seule. Code écrit et activation testée sur l'instance de dev, l'ingestion réelle reste à valider une fois les identifiants Gmail configurés.
+- [x] **Phase 2** : Moteur de matching en cascade, actions de validation humaine dans le dashboard, rattachement définitif aux factures fournisseurs. Code écrit, pas encore testé contre de vraies factures.
 - [ ] **Phase 3** : Alertes IBAN (écart avec l'historique fournisseur), notification en cas de facture en quarantaine, extension à d'autres plateformes de facturation électronique, et éventuellement un support IMAP en complément de l'API Gmail.
 
 ## Sécurité
