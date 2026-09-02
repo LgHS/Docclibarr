@@ -15,6 +15,9 @@ composer.lock
 # Cache PHPUnit
 .phpunit.result.cache
 
+# Zip généré par scripts/build-zip.sh
+build/
+
 # Secrets / identifiants (tokens OAuth Gmail, etc. — ne doivent jamais être commités)
 .env
 *.env
