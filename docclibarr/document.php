@@ -19,6 +19,14 @@
  * depuis le dashboard (voir SPEC.md section 11 : le PDF doit être prévisualisable
  * directement avant validation).
  *
+ * Sécurité : `llx_ecm_files` est la table documentaire GLOBALE de Dolibarr, partagée par
+ * tous les modules. Un simple contrôle du droit docclibarr->read ne suffit pas à
+ * empêcher un utilisateur d'énumérer des `id` et de récupérer n'importe quel document
+ * ECM de l'instance (factures, RH, autre chose), pas seulement ceux de Docclibarr. On
+ * exige donc aussi l'id de l'enregistrement de staging concerné, et on vérifie que
+ * l'`id` ECM demandé correspond bien à un des fichiers réellement rattachés à CET
+ * enregistrement précis (eml/pdf/xml), jamais un id ECM accepté isolément.
+ *
  * AVERTISSEMENT : s'appuie sur EcmFiles::fetch() et sur des fonctions utilitaires du
  * cœur Dolibarr (top_httphead, dol_mimetype) non vérifiées contre une instance réelle,
  * voir SPEC.md section 14 (couche 3).
@@ -38,7 +46,8 @@ if (!$res) {
 	die("Impossible de trouver main.inc.php de Dolibarr");
 }
 
-require_once DOL_DOCUMENT_ROOT.'/core/class/ecmfiles.class.php';
+require_once DOL_DOCUMENT_ROOT.'/ecm/class/ecmfiles.class.php';
+require_once __DIR__.'/../class/facturationelectroniquestaging.class.php';
 
 global $user, $db;
 
@@ -47,9 +56,27 @@ if (!$user->rights->docclibarr->read) {
 }
 
 $id = GETPOST('id', 'int');
+$stagingId = GETPOST('staging_id', 'int');
+
+$staging = new FacturationElectroniqueStaging($db);
+if ($stagingId <= 0 || $staging->fetch($stagingId) <= 0) {
+	http_response_code(404);
+	print "Document introuvable";
+	exit;
+}
+
+$allowedEcmFileIds = array($staging->eml_ecm_file_id, $staging->pdf_ecm_file_id, $staging->xml_ecm_file_id);
+if ($id <= 0 || !in_array($id, $allowedEcmFileIds, true)) {
+	// L'id ECM demandé n'est pas un des fichiers rattachés à cet enregistrement de
+	// staging précis : refusé, même si l'id existe bien dans llx_ecm_files pour un
+	// autre document Dolibarr.
+	http_response_code(403);
+	print "Accès refusé";
+	exit;
+}
 
 $ecmfile = new EcmFiles($db);
-if ($id <= 0 || $ecmfile->fetch($id) <= 0) {
+if ($ecmfile->fetch($id) <= 0) {
 	http_response_code(404);
 	print "Document introuvable";
 	exit;

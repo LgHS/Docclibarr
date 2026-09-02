@@ -38,6 +38,12 @@ if (!$res) {
 }
 
 require_once DOL_DOCUMENT_ROOT.'/core/lib/admin.lib.php';
+require_once __DIR__.'/../class/gmailmailboxreader.class.php';
+// IngestionWorker n'est PAS chargé ici mais seulement au moment de l'action
+// test_ingestion (voir plus bas) : son propre require_once vers EcmFiles peut échouer
+// sur un chemin Dolibarr incorrect, ce qui ferait planter cette page entière à chaque
+// chargement, sans même passer par la moindre action. Ne charger que ce qui est
+// nécessaire, seulement quand c'est nécessaire.
 
 global $langs, $user, $conf;
 
@@ -63,10 +69,141 @@ if ($action === 'update') {
 	setEventMessages($langs->trans("SetupSaved"), null);
 }
 
+// Rempli seulement par action=test_connection ci-dessous, affiché dans un bloc <pre>
+// après le formulaire (voir plus bas) : plus fiable qu'un message d'alerte Dolibarr pour
+// lire/copier un détail de diagnostic potentiellement long, notamment sans accès complet
+// aux logs serveur.
+$testConnectionDebug = null;
+
+if ($action === 'test_connection') {
+	// Teste toujours la configuration réellement enregistrée en base (voir la mise à
+	// jour ci-dessus), pas les valeurs éventuellement retapées dans le formulaire sans
+	// avoir cliqué "Enregistrer" : évite toute ambiguïté sur ce qui est réellement testé.
+	$clientId = $conf->global->DOCCLIBARR_GMAIL_CLIENT_ID ?? '';
+	$clientSecret = $conf->global->DOCCLIBARR_GMAIL_CLIENT_SECRET ?? '';
+	$refreshToken = $conf->global->DOCCLIBARR_GMAIL_REFRESH_TOKEN ?? '';
+
+	if ($clientId === '' || $clientSecret === '' || $refreshToken === '') {
+		setEventMessages($langs->trans("DocclibarrTestConnectionMissingConfig"), null, 'errors');
+	} else {
+		try {
+			$reader = new GmailMailboxReader($clientId, $clientSecret, $refreshToken);
+			$result = $reader->testConnection();
+		} catch (Exception $e) {
+			// Le constructeur peut lever une exception si le rafraîchissement du token
+			// échoue (voir GmailMailboxReader), à traiter comme un échec de connexion au
+			// même titre qu'un échec de testConnection() elle-même.
+			$result = array('success' => false, 'error' => get_class($e).' : '.$e->getMessage());
+		}
+
+		$testConnectionDebug = $result;
+
+		if ($result['success']) {
+			setEventMessages(sprintf($langs->trans("DocclibarrTestConnectionSuccess"), $result['email'], $result['messagesTotal']), null);
+		} else {
+			setEventMessages(sprintf($langs->trans("DocclibarrTestConnectionFailure"), $result['error']), null, 'errors');
+		}
+	}
+}
+
+// Même principe que $testConnectionDebug ci-dessus, pour le run manuel de l'ingestion
+// complète. Volontairement lancé directement dans une page normale plutôt que via l'URL
+// du cron (cron/list.php) : ça permet de capturer même une erreur fatale PHP (via
+// catch (\Throwable), qui attrape aussi les erreurs de classe/fichier manquant, pas
+// seulement les Exception) et de l'afficher ici, sans avoir besoin d'accès aux logs
+// serveur ni de comprendre le mécanisme interne d'exécution du cron Dolibarr.
+$testIngestionDebug = null;
+
+// Chemins Dolibarr/module dont dépend IngestionWorker (directement ou via les classes
+// qu'il charge). Vérifiés avec file_exists() AVANT tout require_once : un require_once
+// sur un fichier absent est un échec fatal PHP non rattrapable par un try/catch, même
+// avec \Throwable, contrairement à une classe manquante via autoload. C'est ce qui a fait
+// planter cette page entière une première fois (voir plus haut, IngestionWorker chargé
+// en haut de fichier), et ce qui aurait aussi fait planter uniquement ce bouton sinon.
+// Calculé systématiquement (pas seulement sur action=test_ingestion), affiché plus bas
+// dans un bloc toujours visible : donne un diagnostic exploitable même sans rien cliquer.
+$requiredPaths = array(
+	'ecm/class/ecmfiles.class.php (Dolibarr)' => DOL_DOCUMENT_ROOT.'/ecm/class/ecmfiles.class.php',
+	'core/class/commonobject.class.php (Dolibarr)' => DOL_DOCUMENT_ROOT.'/core/class/commonobject.class.php',
+	'fourn/class/fournisseur.facture.class.php (Dolibarr, utilisé par card.php)' => DOL_DOCUMENT_ROOT.'/fourn/class/fournisseur.facture.class.php',
+	'societe/class/societe.class.php (Dolibarr, utilisé par card.php)' => DOL_DOCUMENT_ROOT.'/societe/class/societe.class.php',
+	'vendor/autoload.php (composer)' => __DIR__.'/../vendor/autoload.php',
+	'class/gmailmailboxreader.class.php (module)' => __DIR__.'/../class/gmailmailboxreader.class.php',
+	'class/originverifier.class.php (module)' => __DIR__.'/../class/originverifier.class.php',
+	'class/mimeattachmentextractor.class.php (module)' => __DIR__.'/../class/mimeattachmentextractor.class.php',
+	'class/ublinvoiceparser.class.php (module)' => __DIR__.'/../class/ublinvoiceparser.class.php',
+	'class/facturationelectroniquestaging.class.php (module)' => __DIR__.'/../class/facturationelectroniquestaging.class.php',
+	'class/invoicematcher.class.php (module)' => __DIR__.'/../class/invoicematcher.class.php',
+	'class/ingestionworker.class.php (module)' => __DIR__.'/../class/ingestionworker.class.php',
+);
+
+$missingPaths = array();
+foreach ($requiredPaths as $label => $path) {
+	if (!file_exists($path)) {
+		$missingPaths[$label] = $path;
+	}
+}
+
+if ($action === 'test_ingestion') {
+	if (!empty($missingPaths)) {
+		$testIngestionDebug = array('missing_files' => $missingPaths);
+		setEventMessages("Fichier(s) manquant(s), voir le détail ci-dessous, l'ingestion n'a pas été lancée", null, 'errors');
+	} else {
+		try {
+			require_once __DIR__.'/../class/ingestionworker.class.php';
+			$worker = new IngestionWorker($db);
+			$runResult = $worker->run();
+
+			$testIngestionDebug = array(
+				'runResult' => $runResult,
+				'processedCount' => $worker->processedCount,
+				'skippedDuplicatesCount' => $worker->skippedDuplicatesCount,
+				'ignoredCount' => $worker->ignoredCount,
+				'errors' => $worker->errors,
+			);
+
+			if ($runResult === 1 && empty($worker->errors)) {
+				setEventMessages("Ingestion terminée sans erreur, voir le détail ci-dessous", null);
+			} else {
+				setEventMessages("Ingestion terminée avec des erreurs, voir le détail ci-dessous", null, 'errors');
+			}
+		} catch (\Throwable $e) {
+			// \Throwable, pas juste Exception : capture aussi les erreurs fatales PHP
+			// modernes (classe introuvable, appel de méthode inexistante, etc.), qui
+			// n'étendent pas Exception mais Error depuis PHP 7. Utile pour tout ce qui
+			// reste une erreur APRÈS le chargement des fichiers (déjà vérifiés exister
+			// ci-dessus), par exemple une méthode Dolibarr appelée avec la mauvaise
+			// signature.
+			$testIngestionDebug = array(
+				'fatal_error' => get_class($e).' : '.$e->getMessage(),
+				'file' => $e->getFile(),
+				'line' => $e->getLine(),
+			);
+			setEventMessages("Erreur fatale pendant l'ingestion, voir le détail ci-dessous", null, 'errors');
+		}
+	}
+}
+
 $page_name = $langs->trans("DocclibarrSetupPage");
 llxHeader('', $page_name);
 
 print load_fiche_titre($page_name, '', 'docclibarr@docclibarr');
+
+// Diagnostic fichiers, toujours visible, sans risque de plantage (uniquement des
+// file_exists()) : premier endroit à regarder en cas de 500 sur cette page ou sur le
+// cron, ça pointe directement vers le chemin Dolibarr incorrect s'il y en a un.
+print '<div class="marginTopOnly">';
+if (empty($missingPaths)) {
+	print '<div class="ok">Diagnostic fichiers : tous les fichiers requis sont trouvés sur le serveur.</div>';
+} else {
+	print '<div class="error"><b>Diagnostic fichiers : '.count($missingPaths).' fichier(s) introuvable(s) :</b>';
+	print '<pre style="white-space:pre-wrap;word-break:break-all;background:#fff0f0;padding:10px;border:1px solid #e0b0b0;">';
+	foreach ($missingPaths as $label => $path) {
+		print dol_escape_htmltag($label.' : '.$path)."\n";
+	}
+	print '</pre></div>';
+}
+print '</div>';
 
 print '<form method="POST" action="'.$_SERVER["PHP_SELF"].'">';
 print '<input type="hidden" name="token" value="'.newToken().'">';
@@ -93,5 +230,43 @@ print '</table>';
 print '<div class="center"><input type="submit" class="button" value="'.$langs->trans("Save").'"></div>';
 
 print '</form>';
+
+// Formulaire séparé, volontaire : teste toujours la config déjà enregistrée en base
+// (voir action=test_connection ci-dessus), pas ce qui traîne dans le formulaire au-dessus
+// sans avoir été sauvegardé.
+print '<form method="POST" action="'.$_SERVER["PHP_SELF"].'">';
+print '<input type="hidden" name="token" value="'.newToken().'">';
+print '<input type="hidden" name="action" value="test_connection">';
+print '<div class="center marginTopOnly"><input type="submit" class="button" value="'.$langs->trans("DocclibarrTestConnection").'"></div>';
+print '</form>';
+
+// Détail brut du dernier test, affiché tel quel : plus simple à copier/coller que le
+// message d'alerte au-dessus, notamment quand on n'a pas la main sur les logs serveur.
+if ($testConnectionDebug !== null) {
+	print '<div class="marginTopOnly">';
+	print '<b>Détail du dernier test de connexion :</b>';
+	print '<pre style="white-space:pre-wrap;word-break:break-all;background:#f5f5f5;padding:10px;border:1px solid #ccc;">';
+	print dol_escape_htmltag(print_r($testConnectionDebug, true));
+	print '</pre>';
+	print '</div>';
+}
+
+// Test d'ingestion manuel : lance IngestionWorker directement dans cette page plutôt que
+// via le cron, pour capturer une éventuelle erreur fatale sans dépendre des logs serveur
+// (voir action=test_ingestion ci-dessus).
+print '<form method="POST" action="'.$_SERVER["PHP_SELF"].'">';
+print '<input type="hidden" name="token" value="'.newToken().'">';
+print '<input type="hidden" name="action" value="test_ingestion">';
+print '<div class="center marginTopOnly"><input type="submit" class="button" value="Lancer un test d\'ingestion manuel"></div>';
+print '</form>';
+
+if ($testIngestionDebug !== null) {
+	print '<div class="marginTopOnly">';
+	print '<b>Détail du dernier test d\'ingestion :</b>';
+	print '<pre style="white-space:pre-wrap;word-break:break-all;background:#f5f5f5;padding:10px;border:1px solid #ccc;">';
+	print dol_escape_htmltag(print_r($testIngestionDebug, true));
+	print '</pre>';
+	print '</div>';
+}
 
 llxFooter();

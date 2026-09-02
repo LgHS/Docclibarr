@@ -38,16 +38,74 @@ class GmailMailboxReader
 	 * @param string $clientId     Identifiant client OAuth (voir admin/setup.php)
 	 * @param string $clientSecret Secret client OAuth
 	 * @param string $refreshToken Refresh token généré une fois pour la boîte dédiée
+	 * @throws Exception Si le rafraîchissement du token échoue (token invalide, révoqué,
+	 *                    identifiants client incorrects, etc.), avec le détail exact
+	 *                    renvoyé par Google plutôt que de laisser un client sans jeton
+	 *                    valide échouer plus tard silencieusement sur le premier appel API.
 	 */
 	public function __construct($clientId, $clientSecret, $refreshToken)
 	{
 		$client = new Google_Client();
 		$client->setClientId($clientId);
 		$client->setClientSecret($clientSecret);
-		$client->refreshToken($refreshToken);
 		$client->setScopes(array(Google_Service_Gmail::GMAIL_READONLY));
 
+		// refreshToken() ne lève jamais d'exception en cas d'échec (voir
+		// Google_Client::fetchAccessTokenWithRefreshToken) : si Google renvoie une erreur
+		// (ex: "invalid_grant"), le tableau retourné ne contient simplement pas
+		// d'access_token, et le client continue silencieusement sans jeton valide. On
+		// vérifie donc explicitement le résultat plutôt que de laisser le premier appel
+		// API échouer plus loin de façon peu explicite.
+		$credentials = $client->refreshToken($refreshToken);
+		if (!isset($credentials['access_token'])) {
+			$detail = isset($credentials['error_description'])
+				? $credentials['error_description']
+				: (isset($credentials['error']) ? $credentials['error'] : 'réponse inattendue de Google');
+			throw new Exception("Échec du rafraîchissement du token OAuth : ".$detail);
+		}
+
 		$this->service = new Google_Service_Gmail($client);
+	}
+
+	/**
+	 * Vérifie que les identifiants configurés fonctionnent réellement, sans rien
+	 * télécharger : appelle l'endpoint Gmail le plus léger possible (users.getProfile),
+	 * qui confirme juste l'accès et renvoie l'adresse du compte autorisé. Utilisé par le
+	 * bouton "Tester la connexion" de admin/setup.php, pour diagnostiquer un problème de
+	 * credentials sans attendre un cycle complet du cron d'ingestion.
+	 *
+	 * @return array{success: bool, email?: string, messagesTotal?: int, error?: string}
+	 */
+	public function testConnection()
+	{
+		try {
+			$profile = $this->service->users->getProfile('me');
+		} catch (Exception $e) {
+			return array('success' => false, 'error' => get_class($e).' : '.$e->getMessage());
+		}
+
+		$email = $profile !== null ? $profile->getEmailAddress() : null;
+
+		// Distingue un vrai succès (adresse email présente) d'une réponse HTTP réussie
+		// mais vide ou mal désérialisée (voir la découverte du 2026-09-02, un premier
+		// appel a montré "succès" avec des champs vides sans qu'aucune exception n'ait
+		// été levée) : dans ce cas, mieux vaut le signaler explicitement que d'afficher
+		// un faux succès trompeur, avec assez de détail pour comprendre où ça a coincé.
+		if ($email === null || $email === '') {
+			return array(
+				'success' => false,
+				'error' => 'Réponse Google reçue sans erreur HTTP mais sans adresse email exploitable. '
+					.'Profile null : '.var_export($profile === null, true).'. '
+					.'Classe reçue : '.($profile !== null ? get_class($profile) : 'n/a').'. '
+					.'Contenu brut : '.($profile !== null ? var_export($profile->toSimpleObject(), true) : 'n/a'),
+			);
+		}
+
+		return array(
+			'success' => true,
+			'email' => $email,
+			'messagesTotal' => $profile->getMessagesTotal(),
+		);
 	}
 
 	/**

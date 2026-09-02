@@ -15,7 +15,7 @@
  * along with this program.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-require_once DOL_DOCUMENT_ROOT.'/core/class/ecmfiles.class.php';
+require_once DOL_DOCUMENT_ROOT.'/ecm/class/ecmfiles.class.php';
 require_once __DIR__.'/gmailmailboxreader.class.php';
 require_once __DIR__.'/originverifier.class.php';
 require_once __DIR__.'/mimeattachmentextractor.class.php';
@@ -98,7 +98,16 @@ class IngestionWorker
 		// d'authenticité réelle se fait toujours après sur chaque message individuellement.
 		$query = 'from:community@doccle.be has:attachment';
 
-		$reader = new GmailMailboxReader($clientId, $clientSecret, $refreshToken);
+		try {
+			$reader = new GmailMailboxReader($clientId, $clientSecret, $refreshToken);
+		} catch (Exception $e) {
+			// Le constructeur peut lever une exception si le rafraîchissement du token
+			// échoue (voir GmailMailboxReader), à traiter comme un échec bloquant de tout
+			// le cycle d'ingestion plutôt que de laisser l'exception remonter au cron.
+			$this->errors[] = "Échec de connexion à Gmail : ".$e->getMessage();
+			return 0;
+		}
+
 		$rawMessages = $reader->fetchRawMessages($query);
 
 		if (!empty($reader->errors)) {

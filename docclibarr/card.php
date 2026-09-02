@@ -43,9 +43,27 @@ if (!$res) {
 }
 
 require_once __DIR__.'/../class/facturationelectroniquestaging.class.php';
+
+// Vérifiés avec file_exists() avant tout require_once : un require_once sur un chemin
+// Dolibarr incorrect est un échec fatal PHP non rattrapable (déjà rencontré une fois
+// avec ecm/class/ecmfiles.class.php, voir SPEC.md et admin/setup.php qui fait le même
+// diagnostic). Affiche une page d'erreur lisible plutôt qu'un 500 générique.
+$cardRequiredPaths = array(
+	DOL_DOCUMENT_ROOT.'/fourn/class/fournisseur.facture.class.php',
+	DOL_DOCUMENT_ROOT.'/societe/class/societe.class.php',
+	DOL_DOCUMENT_ROOT.'/ecm/class/ecmfiles.class.php',
+);
+$cardMissingPaths = array_filter($cardRequiredPaths, function ($path) {
+	return !file_exists($path);
+});
+if (!empty($cardMissingPaths)) {
+	print "Fichier(s) Dolibarr introuvable(s) : ".implode(', ', $cardMissingPaths).". Voir le diagnostic complet sur admin/setup.php.";
+	exit;
+}
+
 require_once DOL_DOCUMENT_ROOT.'/fourn/class/fournisseur.facture.class.php';
 require_once DOL_DOCUMENT_ROOT.'/societe/class/societe.class.php';
-require_once DOL_DOCUMENT_ROOT.'/core/class/ecmfiles.class.php';
+require_once DOL_DOCUMENT_ROOT.'/ecm/class/ecmfiles.class.php';
 
 global $langs, $user, $conf, $db;
 
@@ -221,12 +239,12 @@ print '</table>';
 // Prévisualisation (voir SPEC.md section 11)
 print '<div class="marginTopOnly">';
 if (!empty($staging->pdf_ecm_file_id)) {
-	print '<a class="button" href="'.dol_buildpath('/docclibarr/document.php', 1).'?id='.((int) $staging->pdf_ecm_file_id).'" target="_blank">'.$langs->trans("DocclibarrDownloadPdf").'</a> ';
+	print '<a class="button" href="'.dol_buildpath('/docclibarr/document.php', 1).'?id='.((int) $staging->pdf_ecm_file_id).'&staging_id='.$id.'" target="_blank">'.$langs->trans("DocclibarrDownloadPdf").'</a> ';
 } else {
 	print $langs->trans("DocclibarrNoPdf").' ';
 }
 if (!empty($staging->xml_ecm_file_id)) {
-	print '<a class="button" href="'.dol_buildpath('/docclibarr/document.php', 1).'?id='.((int) $staging->xml_ecm_file_id).'" target="_blank">'.$langs->trans("DocclibarrDownloadXml").'</a>';
+	print '<a class="button" href="'.dol_buildpath('/docclibarr/document.php', 1).'?id='.((int) $staging->xml_ecm_file_id).'&staging_id='.$id.'" target="_blank">'.$langs->trans("DocclibarrDownloadXml").'</a>';
 }
 print '</div>';
 

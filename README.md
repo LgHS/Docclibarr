@@ -67,7 +67,7 @@ Adresse de la boîte (étape 1), Client ID et Client Secret (étape 4), Refresh 
 
 **7. Activer la tâche cron**
 
-*Configuration → Outils admin → Tâches planifiées*, cherchez `DocclibarrIngestionWorker` (désactivée par défaut à l'activation du module, pour éviter qu'elle tourne dans le vide avant que la config Gmail existe). Cochez-la, réglez la fréquence si besoin (15 minutes par défaut), et configurez le déclencheur d'exécution périodique côté serveur (crontab système appelant `scripts/cron/cron_run_jobs.php`, ou webcron externe si vous n'avez pas la main sur le crontab). Le bouton "Exécuter maintenant" de cette même page permet un premier test manuel immédiat, sans attendre le prochain cycle.
+*Configuration → Outils admin → Travaux planifiés*, cherchez `DocclibarrIngestionWorker` (désactivée par défaut à l'activation du module, pour éviter qu'elle tourne dans le vide avant que la config Gmail existe). Cochez-la, réglez la fréquence si besoin (15 minutes par défaut), et configurez le déclencheur d'exécution périodique côté serveur (crontab système appelant `scripts/cron/cron_run_jobs.php`, ou webcron externe si vous n'avez pas la main sur le crontab). Le bouton "Exécuter maintenant" de cette même page permet un premier test manuel immédiat, sans attendre le prochain cycle.
 
 ## Roadmap
 
