@@ -105,6 +105,27 @@ class modDocclibarr extends DolibarrModules
 		// Pas de widgets pour la V1
 		$this->boxes = array();
 
+		// Tâche cron de secours (voir SPEC.md section 4 et 15) : filet de sécurité si la
+		// notification push Pub/Sub est manquée, pas encore implémentée en phase 1. Toutes
+		// les 15 minutes, désactivée par défaut à l'activation (l'utilisateur doit la
+		// vérifier/activer une fois la configuration Gmail renseignée, voir admin/setup.php).
+		$this->cronjobs = array(
+			0 => array(
+				'label' => 'DocclibarrIngestionWorker',
+				'jobtype' => 'method',
+				'class' => 'docclibarr/class/ingestionworker.class.php',
+				'objectname' => 'IngestionWorker',
+				'method' => 'run',
+				'parameters' => '',
+				'comment' => "Récupère les nouvelles factures électroniques Doccle et les met en staging",
+				'frequency' => 15,
+				'unitfrequency' => 60,
+				'status' => 0,
+				'test' => true,
+				'priority' => 50,
+			),
+		);
+
 		// Permissions
 		$this->rights = array();
 		$r = 0;
