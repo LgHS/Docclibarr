@@ -12,7 +12,7 @@ Docclibarr est un module à part entière, distinct du module d'**import bancair
 
 ## Statut
 
-🚧 **En développement.** Le squelette du module (Phase 1 et 2) est écrit et testé (29 tests PHPUnit sur la logique pure, activation confirmée sur une instance de dev), l'ingestion réelle contre de vraies factures est en cours de validation. Voir la roadmap ci-dessous pour le détail des phases.
+🚧 **En développement.** Le module (Phase 1 et 2) est écrit et testé : 30 tests PHPUnit sur la logique pure, activation confirmée sur une instance de dev, connexion Gmail authentifiée avec succès (adresse + nombre de messages confirmés), parsing validé contre 10 vraies factures/notes de crédit de 8 fournisseurs différents. Reste à valider : l'ingestion Gmail de bout en bout sur une vraie facture Peppol reçue via Doccle (en attente qu'une facture réelle arrive sur la boîte dédiée). Voir la roadmap ci-dessous pour le détail des phases.
 
 ## Fonctionnement prévu
 
@@ -75,19 +75,20 @@ Deux niveaux, volontairement séparés.
 
 **Tests automatisés (`tests/`, committés)** : couvrent `OriginVerifier`, `UblInvoiceParser`, `MimeAttachmentExtractor` et `InvoiceMatcher`, la logique pure sans dépendance à Dolibarr ni à l'API Gmail. Fixtures entièrement fictives (noms, TVA, IBAN, communications structurées inventés), aucune donnée réelle. `composer install` puis `./vendor/bin/phpunit`.
 
-**Validation contre de vrais emails, jamais committée.** À un moment du développement, la meilleure façon de vérifier que le parsing tient sur du vrai XML (et pas seulement sur des fixtures imaginées) a été d'exporter un lot d'emails réels depuis Gmail (menu ⋮ → "Télécharger le message") couvrant plusieurs cas : des factures Peppol reçues via Doccle, des emails Doccle sans facture jointe (notifications, support), des factures reçues directement d'un fournisseur sans passer par Doccle, et du courrier complètement sans rapport (spam, listes de diffusion). Les fichiers `.eml` ont été déposés dans `tests/fixtures/real/` (`.eml` est exclu du dépôt par `.gitignore`, sans exception, ce dossier ne quitte jamais la machine locale) puis passés directement dans un petit script PHP appelant les classes du module, sans passer par Gmail ni par Dolibarr.
+**Validation contre de vraies données, jamais committée.** À plusieurs reprises pendant le développement, la meilleure façon de vérifier que le parsing tient sur du vrai contenu (et pas seulement sur des fixtures imaginées) a été d'exporter des échantillons réels depuis Gmail, en deux passes : d'abord des `.eml` complets (menu ⋮ → "Télécharger le message") couvrant plusieurs cas, des factures Peppol reçues via Doccle, des emails Doccle sans facture jointe (notifications, support), des factures reçues directement d'un fournisseur sans passer par Doccle, et du courrier complètement sans rapport (spam, listes de diffusion), puis un lot plus large de XML de factures/notes de crédit exportées directement (10 fichiers, 8 fournisseurs différents : banque, distribution, énergie, télécom, eau, PME). Les fichiers ont été déposés dans `tests/fixtures/real/` (exclu du dépôt entièrement par `.gitignore`, ce dossier ne quitte jamais la machine locale) puis passés directement dans un petit script PHP appelant les classes du module, sans passer par Gmail ni par Dolibarr.
 
 Cette étape a fait remonter des cas que les fixtures synthétiques n'avaient pas anticipés, corrigés depuis :
 - Un vrai XML Doccle n'avait pas de TVA client du tout, ce que le garde-fou anti-usurpation traitait à tort comme une tentative d'usurpation.
 - Un email Doccle contenait une note de crédit UBL (`CreditNote`), pas une facture (`Invoice`), un type de document jusque-là non prévu.
+- Plusieurs factures déjà réglées par prélèvement automatique (frais bancaires, grande distribution) montraient un `PayableAmount` à 0, ce qui mettait le montant TTC extrait à 0 au lieu du vrai montant de la transaction, repli sur `TaxInclusiveAmount` dans ce cas précis.
 - La vraie adresse d'expédition Doccle (`community@doccle.be`) a pu être confirmée telle quelle plutôt que supposée.
 
-Pour refaire cette validation avec de nouveaux échantillons : déposez les `.eml` dans `tests/fixtures/real/`, ils resteront locaux automatiquement.
+Pour refaire cette validation avec de nouveaux échantillons : déposez les `.eml`/`.xml` dans `tests/fixtures/real/`, ils resteront locaux automatiquement.
 
 ## Roadmap
 
-- [x] **Phase 1** : Ingestion des emails, vérification d'origine, parsing XML, stockage en table de staging, dashboard en lecture seule. Code écrit et activation testée sur l'instance de dev, l'ingestion réelle reste à valider une fois les identifiants Gmail configurés.
-- [x] **Phase 2** : Moteur de matching en cascade, actions de validation humaine dans le dashboard, rattachement définitif aux factures fournisseurs. Code écrit, pas encore testé contre de vraies factures.
+- [x] **Phase 1** : Ingestion des emails, vérification d'origine, parsing XML, stockage en table de staging, dashboard en lecture seule. Code écrit, activation testée, connexion Gmail confirmée fonctionnelle, parsing validé contre de vraies factures. Reste à valider : le cycle complet cron → stockage ECM → staging sur une vraie facture Peppol (en attente qu'une facture réelle arrive sur la boîte dédiée).
+- [x] **Phase 2** : Moteur de matching en cascade, actions de validation humaine dans le dashboard, rattachement définitif aux factures fournisseurs. Code écrit, pas encore testé contre de vraies factures dans Dolibarr (création de brouillon, rattachement manuel).
 - [ ] **Phase 3** : Alertes IBAN (écart avec l'historique fournisseur), notification en cas de facture en quarantaine, extension à d'autres plateformes de facturation électronique, et éventuellement un support IMAP en complément de l'API Gmail.
 
 ## Sécurité
