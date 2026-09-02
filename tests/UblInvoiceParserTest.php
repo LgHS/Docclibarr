@@ -11,8 +11,8 @@ use PHPUnit\Framework\TestCase;
 
 /**
  * Fixtures entièrement fictives (noms, TVA, IBAN, communications structurées), voir
- * tests/fixtures/README.md : à remplacer par les 3 emails réels anonymisés (Piron,
- * OGBAY BV, Proximus) dès que possible. Seule la forme des données reproduit les
+ * tests/fixtures/README.md : à remplacer par les 3 emails réels anonymisés (Fournisseur1,
+ * Fournisseur2 BV, Fournisseur3) dès que possible. Seule la forme des données reproduit les
  * particularités décrites en SPEC.md section 6, aucune valeur réelle n'est reprise ici.
  */
 class UblInvoiceParserTest extends TestCase
@@ -24,11 +24,11 @@ class UblInvoiceParserTest extends TestCase
 	const EXPECTED_CUSTOMIZATION_ID = 'urn:cen.eu:en16931:2017#compliant#urn:fdc:peppol.eu:2017:poacc:billing:3.0';
 
 	/**
-	 * Style "Piron" : communication structurée au format +++.../..../.....+++,
+	 * Style "Fournisseur1" : communication structurée au format +++.../..../.....+++,
 	 * EndpointID en schème 9925 (jamais utilisé comme clé de matching). Toutes les
 	 * valeurs (TVA, IBAN, communication) sont fictives.
 	 */
-	protected function pironStyleXml()
+	protected function fournisseur1StyleXml()
 	{
 		return '<?xml version="1.0" encoding="UTF-8"?>'
 			.'<Invoice xmlns="'.self::NS_INVOICE.'" xmlns:cbc="'.self::NS_CBC.'" xmlns:cac="'.self::NS_CAC.'">'
@@ -39,7 +39,7 @@ class UblInvoiceParserTest extends TestCase
 			.'<cbc:DocumentCurrencyCode>EUR</cbc:DocumentCurrencyCode>'
 			.'<cac:AccountingSupplierParty><cac:Party>'
 			.'<cbc:EndpointID schemeID="9925">BE0123456789</cbc:EndpointID>'
-			.'<cac:PartyName><cbc:Name>Combustibles Piron</cbc:Name></cac:PartyName>'
+			.'<cac:PartyName><cbc:Name>Fournisseur1 SA</cbc:Name></cac:PartyName>'
 			.'<cac:PartyTaxScheme><cbc:CompanyID>BE0123456789</cbc:CompanyID></cac:PartyTaxScheme>'
 			.'</cac:Party></cac:AccountingSupplierParty>'
 			.'<cac:AccountingCustomerParty><cac:Party>'
@@ -58,10 +58,10 @@ class UblInvoiceParserTest extends TestCase
 	}
 
 	/**
-	 * Style "OGBAY BV" : aucun bloc PaymentMeans du tout, oblige le fallback niveau 2
+	 * Style "Fournisseur2 BV" : aucun bloc PaymentMeans du tout, oblige le fallback niveau 2
 	 * du moteur de matching (voir SPEC.md section 8). Valeurs fictives.
 	 */
-	protected function ogbayStyleXml()
+	protected function fournisseur2StyleXml()
 	{
 		return '<?xml version="1.0" encoding="UTF-8"?>'
 			.'<Invoice xmlns="'.self::NS_INVOICE.'" xmlns:cbc="'.self::NS_CBC.'" xmlns:cac="'.self::NS_CAC.'">'
@@ -72,7 +72,7 @@ class UblInvoiceParserTest extends TestCase
 			.'<cbc:DocumentCurrencyCode>EUR</cbc:DocumentCurrencyCode>'
 			.'<cac:AccountingSupplierParty><cac:Party>'
 			.'<cbc:EndpointID schemeID="0208">0234567890</cbc:EndpointID>'
-			.'<cac:PartyName><cbc:Name>OGBAY BV</cbc:Name></cac:PartyName>'
+			.'<cac:PartyName><cbc:Name>Fournisseur2 BV</cbc:Name></cac:PartyName>'
 			.'<cac:PartyTaxScheme><cbc:CompanyID>BE0234567890</cbc:CompanyID></cac:PartyTaxScheme>'
 			.'</cac:Party></cac:AccountingSupplierParty>'
 			.'<cac:AccountingCustomerParty><cac:Party>'
@@ -85,10 +85,10 @@ class UblInvoiceParserTest extends TestCase
 			.'</Invoice>';
 	}
 
-	public function testParsesPironStyleInvoice()
+	public function testParsesFournisseur1StyleInvoice()
 	{
 		$parser = new UblInvoiceParser();
-		$data = $parser->parse($this->pironStyleXml());
+		$data = $parser->parse($this->fournisseur1StyleXml());
 
 		$this->assertNotNull($data);
 		$this->assertSame(UblInvoiceParser::DOCUMENT_TYPE_INVOICE, $data['document_type']);
@@ -154,7 +154,7 @@ class UblInvoiceParserTest extends TestCase
 		// PayableAmount et TaxInclusiveAmount diffèrent volontairement dans la fixture
 		// (cas d'un acompte déjà versé, voir SPEC.md section 6) : amount_ttc doit valoir
 		// PayableAmount.
-		$xml = str_replace('<cbc:PayableAmount>121.00</cbc:PayableAmount>', '<cbc:PayableAmount>21.00</cbc:PayableAmount>', $this->pironStyleXml());
+		$xml = str_replace('<cbc:PayableAmount>121.00</cbc:PayableAmount>', '<cbc:PayableAmount>21.00</cbc:PayableAmount>', $this->fournisseur1StyleXml());
 
 		$parser = new UblInvoiceParser();
 		$data = $parser->parse($xml);
@@ -162,10 +162,23 @@ class UblInvoiceParserTest extends TestCase
 		$this->assertSame(21.00, $data['amount_ttc']);
 	}
 
+	public function testFallsBackToTaxInclusiveAmountWhenPayableAmountIsZero()
+	{
+		// Cas réel trouvé le 2026-09-02 (frais bancaires prélevés automatiquement) :
+		// PayableAmount à 0 quand la facture est déjà intégralement réglée. amount_ttc
+		// doit alors valoir TaxInclusiveAmount (le vrai montant de la transaction), pas 0.
+		$xml = str_replace('<cbc:PayableAmount>121.00</cbc:PayableAmount>', '<cbc:PayableAmount>0</cbc:PayableAmount>', $this->fournisseur1StyleXml());
+
+		$parser = new UblInvoiceParser();
+		$data = $parser->parse($xml);
+
+		$this->assertSame(121.00, $data['amount_ttc']);
+	}
+
 	public function testHandlesMissingPaymentMeansGracefully()
 	{
 		$parser = new UblInvoiceParser();
-		$data = $parser->parse($this->ogbayStyleXml());
+		$data = $parser->parse($this->fournisseur2StyleXml());
 
 		$this->assertNotNull($data);
 		$this->assertNull($data['payment_ref_raw']);
@@ -179,14 +192,14 @@ class UblInvoiceParserTest extends TestCase
 		$parser = new UblInvoiceParser();
 
 		$this->assertSame('111222233333', $parser->normalizePaymentRef('+++111/2222/33333+++'));
-		// Style "Proximus" : communication présente mais sans séparateurs (voir SPEC.md
+		// Style "Fournisseur3" : communication présente mais sans séparateurs (voir SPEC.md
 		// section 6), valeur fictive.
 		$this->assertSame('999888777666', $parser->normalizePaymentRef('999888777666'));
 	}
 
 	public function testRejectsXmlWithoutExpectedCustomizationId()
 	{
-		$xml = str_replace(self::EXPECTED_CUSTOMIZATION_ID, 'urn:something:else', $this->pironStyleXml());
+		$xml = str_replace(self::EXPECTED_CUSTOMIZATION_ID, 'urn:something:else', $this->fournisseur1StyleXml());
 
 		$parser = new UblInvoiceParser();
 		$data = $parser->parse($xml);

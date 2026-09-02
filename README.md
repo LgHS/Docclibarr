@@ -69,6 +69,21 @@ Adresse de la boîte (étape 1), Client ID et Client Secret (étape 4), Refresh 
 
 *Configuration → Outils admin → Travaux planifiés*, cherchez `DocclibarrIngestionWorker` (désactivée par défaut à l'activation du module, pour éviter qu'elle tourne dans le vide avant que la config Gmail existe). Cochez-la, réglez la fréquence si besoin (15 minutes par défaut), et configurez le déclencheur d'exécution périodique côté serveur (crontab système appelant `scripts/cron/cron_run_jobs.php`, ou webcron externe si vous n'avez pas la main sur le crontab). Le bouton "Exécuter maintenant" de cette même page permet un premier test manuel immédiat, sans attendre le prochain cycle.
 
+## Tests
+
+Deux niveaux, volontairement séparés.
+
+**Tests automatisés (`tests/`, committés)** : couvrent `OriginVerifier`, `UblInvoiceParser`, `MimeAttachmentExtractor` et `InvoiceMatcher`, la logique pure sans dépendance à Dolibarr ni à l'API Gmail. Fixtures entièrement fictives (noms, TVA, IBAN, communications structurées inventés), aucune donnée réelle. `composer install` puis `./vendor/bin/phpunit`.
+
+**Validation contre de vrais emails, jamais committée.** À un moment du développement, la meilleure façon de vérifier que le parsing tient sur du vrai XML (et pas seulement sur des fixtures imaginées) a été d'exporter un lot d'emails réels depuis Gmail (menu ⋮ → "Télécharger le message") couvrant plusieurs cas : des factures Peppol reçues via Doccle, des emails Doccle sans facture jointe (notifications, support), des factures reçues directement d'un fournisseur sans passer par Doccle, et du courrier complètement sans rapport (spam, listes de diffusion). Les fichiers `.eml` ont été déposés dans `tests/fixtures/real/` (`.eml` est exclu du dépôt par `.gitignore`, sans exception, ce dossier ne quitte jamais la machine locale) puis passés directement dans un petit script PHP appelant les classes du module, sans passer par Gmail ni par Dolibarr.
+
+Cette étape a fait remonter des cas que les fixtures synthétiques n'avaient pas anticipés, corrigés depuis :
+- Un vrai XML Doccle n'avait pas de TVA client du tout, ce que le garde-fou anti-usurpation traitait à tort comme une tentative d'usurpation.
+- Un email Doccle contenait une note de crédit UBL (`CreditNote`), pas une facture (`Invoice`), un type de document jusque-là non prévu.
+- La vraie adresse d'expédition Doccle (`community@doccle.be`) a pu être confirmée telle quelle plutôt que supposée.
+
+Pour refaire cette validation avec de nouveaux échantillons : déposez les `.eml` dans `tests/fixtures/real/`, ils resteront locaux automatiquement.
+
 ## Roadmap
 
 - [x] **Phase 1** : Ingestion des emails, vérification d'origine, parsing XML, stockage en table de staging, dashboard en lecture seule. Code écrit et activation testée sur l'instance de dev, l'ingestion réelle reste à valider une fois les identifiants Gmail configurés.

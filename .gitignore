@@ -26,9 +26,11 @@ token.json
 *.pem
 *.key
 
-# .eml réels : jamais publiés, aucune exception (voir tests/fixtures/README.md et
-# tests/fixtures/real/, purement locaux)
+# Données réelles (.eml, XML de factures, PDF...) : jamais publiées, aucune exception.
+# *.eml seul ne suffisait pas (raté une fois avec des .xml exportés séparément) : tout le
+# dossier est exclu, purement local, voir tests/fixtures/README.md.
 *.eml
+tests/fixtures/real/
 
 # OS
 .DS_Store

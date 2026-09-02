@@ -103,6 +103,22 @@ class UblInvoiceParser
 
 		$paymentRefRaw = $this->queryString($xpath, '/'.$rootPrefix.'/cac:PaymentMeans/cbc:PaymentID');
 
+		// Montant TTC : PayableAmount par défaut (voir SPEC.md section 6, peut différer de
+		// TaxInclusiveAmount en cas d'acompte déjà versé). Cas réel trouvé le 2026-09-02
+		// (factures de frais bancaires Belfius, prélevées automatiquement) : quand la
+		// facture est intégralement déjà réglée, PayableAmount vaut 0 alors que le montant
+		// réel de la transaction est TaxInclusiveAmount. Repli sur ce dernier dans ce cas
+		// précis, pertinent pour cette association qui ne récupère jamais la TVA, donc le
+		// TTC est la valeur comptable qui compte, jamais un solde restant à payer.
+		$payableAmount = $this->queryFloat($xpath, '/'.$rootPrefix.'/cac:LegalMonetaryTotal/cbc:PayableAmount');
+		$taxInclusiveAmount = $this->queryFloat($xpath, '/'.$rootPrefix.'/cac:LegalMonetaryTotal/cbc:TaxInclusiveAmount');
+		$amountTtc = ($payableAmount !== null && $payableAmount > 0) ? $payableAmount : $taxInclusiveAmount;
+		// Si aucun des deux n'est exploitable (TaxInclusiveAmount absent alors que
+		// PayableAmount vaut 0 ou est absent), garder PayableAmount tel quel plutôt que null.
+		if ($amountTtc === null) {
+			$amountTtc = $payableAmount;
+		}
+
 		return array(
 			'document_type' => $documentType,
 			'invoice_number' => $this->queryString($xpath, '/'.$rootPrefix.'/cbc:ID'),
@@ -114,9 +130,7 @@ class UblInvoiceParser
 			'supplier_name' => $this->queryString($xpath, '/'.$rootPrefix.'/cac:AccountingSupplierParty/cac:Party/cac:PartyName/cbc:Name'),
 			'customer_vat' => $this->queryString($xpath, '/'.$rootPrefix.'/cac:AccountingCustomerParty/cac:Party/cac:PartyTaxScheme/cbc:CompanyID'),
 			'amount_ht' => $this->queryFloat($xpath, '/'.$rootPrefix.'/cac:LegalMonetaryTotal/cbc:TaxExclusiveAmount'),
-			// PayableAmount, jamais TaxInclusiveAmount qui peut différer en cas d'acompte
-			// déjà versé (voir SPEC.md section 6).
-			'amount_ttc' => $this->queryFloat($xpath, '/'.$rootPrefix.'/cac:LegalMonetaryTotal/cbc:PayableAmount'),
+			'amount_ttc' => $amountTtc,
 			'currency' => $this->queryString($xpath, '/'.$rootPrefix.'/cbc:DocumentCurrencyCode'),
 			'payment_ref_raw' => $paymentRefRaw,
 			'payment_ref_normalized' => $paymentRefRaw !== null ? $this->normalizePaymentRef($paymentRefRaw) : null,

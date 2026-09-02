@@ -58,7 +58,7 @@ class InvoiceMatcherTest extends TestCase
 
 	public function testLevel2FallbackOnVatAmountAndDateWindow()
 	{
-		// Pas de communication structurée exploitable (cas OGBAY, voir SPEC.md section 8).
+		// Pas de communication structurée exploitable (cas Fournisseur2, voir SPEC.md section 8).
 		$staging = array(
 			'payment_ref_normalized' => null,
 			'supplier_vat' => 'BE0234567890',
