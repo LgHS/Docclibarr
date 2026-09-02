@@ -26,6 +26,7 @@ DocclibarrMatchConfidence = Confidence
 DocclibarrMatchConfidenceHigh = High (exact reference)
 DocclibarrMatchConfidenceMedium = Medium (VAT + amount + date)
 DocclibarrMatchConfidenceSuspect = Suspect: customer VAT mismatch
+DocclibarrMatchConfidenceNone = Unknown
 DocclibarrValidate = Validate
 DocclibarrReject = Reject
 DocclibarrRejectionReason = Rejection reason

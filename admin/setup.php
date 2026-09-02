@@ -184,6 +184,108 @@ if ($action === 'test_ingestion') {
 	}
 }
 
+/**
+ * Vide les données de test Docclibarr : uniquement la table de staging du module et les
+ * documents ECM stockés sous filepath = 'docclibarr/...', jamais rien d'autre dans
+ * Dolibarr. Pratique pour retester l'ingestion depuis un état propre sans repasser par
+ * phpMyAdmin à chaque fois.
+ *
+ * @param DoliDB $db
+ * @return array{staging: int, ecm: int, files: int}
+ */
+function docclibarr_flush_test_data($db)
+{
+	$counts = array('staging' => 0, 'ecm' => 0, 'files' => 0);
+
+	$resql = $db->query("DELETE FROM ".MAIN_DB_PREFIX."facturation_electronique_staging");
+	if ($resql) {
+		$counts['staging'] = $db->affected_rows($resql);
+	}
+
+	$resql = $db->query("DELETE FROM ".MAIN_DB_PREFIX."ecm_files WHERE filepath LIKE 'docclibarr/%'");
+	if ($resql) {
+		$counts['ecm'] = $db->affected_rows($resql);
+	}
+
+	$dir = DOL_DATA_ROOT.'/docclibarr';
+	if (is_dir($dir)) {
+		$counts['files'] = docclibarr_delete_directory_recursive($dir);
+	}
+
+	return $counts;
+}
+
+/**
+ * @param string $dir
+ * @return int Nombre de fichiers supprimés
+ */
+function docclibarr_delete_directory_recursive($dir)
+{
+	$count = 0;
+	$items = scandir($dir);
+	if ($items === false) {
+		return 0;
+	}
+
+	foreach ($items as $item) {
+		if ($item === '.' || $item === '..') {
+			continue;
+		}
+		$path = $dir.'/'.$item;
+		if (is_dir($path)) {
+			$count += docclibarr_delete_directory_recursive($path);
+			@rmdir($path);
+		} else {
+			if (@unlink($path)) {
+				$count++;
+			}
+		}
+	}
+
+	return $count;
+}
+
+$testFlushDebug = null;
+
+if ($action === 'flush_test_data') {
+	if (!$user->admin) {
+		accessforbidden();
+	}
+	try {
+		$testFlushDebug = docclibarr_flush_test_data($db);
+		setEventMessages("Données de test vidées, voir le détail ci-dessous", null);
+	} catch (\Throwable $e) {
+		$testFlushDebug = array('fatal_error' => get_class($e).' : '.$e->getMessage());
+		setEventMessages("Erreur pendant le vidage, voir le détail ci-dessous", null, 'errors');
+	}
+}
+
+// Diagnostic : reproduit exactement ce que fait docclibarr/list.php (instancier
+// FacturationElectroniqueStaging, appeler fetchAll()), mais depuis cette page dont on
+// sait qu'elle fonctionne. Si ça passe ici mais que list.php plante en 500 muet, le
+// problème est spécifique au fichier/déploiement de list.php, pas à la logique elle-même.
+$testFetchAllDebug = null;
+
+if ($action === 'test_fetch_all') {
+	try {
+		require_once __DIR__.'/../class/facturationelectroniquestaging.class.php';
+		$stagingTest = new FacturationElectroniqueStaging($db);
+		$recordsTest = $stagingTest->fetchAll('DESC', 'email_received_at', 0, 0, array());
+		$testFetchAllDebug = array(
+			'result_type' => gettype($recordsTest),
+			'count' => is_array($recordsTest) ? count($recordsTest) : $recordsTest,
+		);
+		setEventMessages("fetchAll() a réussi, voir le détail ci-dessous", null);
+	} catch (\Throwable $e) {
+		$testFetchAllDebug = array(
+			'fatal_error' => get_class($e).' : '.$e->getMessage(),
+			'file' => $e->getFile(),
+			'line' => $e->getLine(),
+		);
+		setEventMessages("fetchAll() a échoué, voir le détail ci-dessous", null, 'errors');
+	}
+}
+
 $page_name = $langs->trans("DocclibarrSetupPage");
 llxHeader('', $page_name);
 
@@ -265,6 +367,41 @@ if ($testIngestionDebug !== null) {
 	print '<b>Détail du dernier test d\'ingestion :</b>';
 	print '<pre style="white-space:pre-wrap;word-break:break-all;background:#f5f5f5;padding:10px;border:1px solid #ccc;">';
 	print dol_escape_htmltag(print_r($testIngestionDebug, true));
+	print '</pre>';
+	print '</div>';
+}
+
+// Purge des données de test (voir action=flush_test_data ci-dessus) : uniquement les
+// données Docclibarr (staging + documents ECM sous docclibarr/), jamais rien d'autre dans
+// Dolibarr. Confirmation JS puisque c'est une suppression, même limitée à nos propres
+// données de test.
+print '<form method="POST" action="'.$_SERVER["PHP_SELF"].'" onsubmit="return confirm(\'Vider toutes les données de test Docclibarr (staging + documents ECM du module) ? Irréversible.\');">';
+print '<input type="hidden" name="token" value="'.newToken().'">';
+print '<input type="hidden" name="action" value="flush_test_data">';
+print '<div class="center marginTopOnly"><input type="submit" class="button button-cancel" value="Vider les données de test Docclibarr"></div>';
+print '</form>';
+
+if ($testFlushDebug !== null) {
+	print '<div class="marginTopOnly">';
+	print '<b>Détail du dernier vidage :</b>';
+	print '<pre style="white-space:pre-wrap;word-break:break-all;background:#f5f5f5;padding:10px;border:1px solid #ccc;">';
+	print dol_escape_htmltag(print_r($testFlushDebug, true));
+	print '</pre>';
+	print '</div>';
+}
+
+// Diagnostic isolant list.php (voir action=test_fetch_all ci-dessus).
+print '<form method="POST" action="'.$_SERVER["PHP_SELF"].'">';
+print '<input type="hidden" name="token" value="'.newToken().'">';
+print '<input type="hidden" name="action" value="test_fetch_all">';
+print '<div class="center marginTopOnly"><input type="submit" class="button" value="Tester fetchAll() (diagnostic list.php)"></div>';
+print '</form>';
+
+if ($testFetchAllDebug !== null) {
+	print '<div class="marginTopOnly">';
+	print '<b>Détail du test fetchAll() :</b>';
+	print '<pre style="white-space:pre-wrap;word-break:break-all;background:#f5f5f5;padding:10px;border:1px solid #ccc;">';
+	print dol_escape_htmltag(print_r($testFetchAllDebug, true));
 	print '</pre>';
 	print '</div>';
 }

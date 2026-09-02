@@ -26,6 +26,7 @@ DocclibarrMatchConfidence = Confiance
 DocclibarrMatchConfidenceHigh = Forte (référence exacte)
 DocclibarrMatchConfidenceMedium = Moyenne (TVA + montant + date)
 DocclibarrMatchConfidenceSuspect = Suspect : TVA client incohérente
+DocclibarrMatchConfidenceNone = Inconnue
 DocclibarrValidate = Valider
 DocclibarrReject = Rejeter
 DocclibarrRejectionReason = Motif du rejet

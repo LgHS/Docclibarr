@@ -51,7 +51,7 @@ class modDocclibarr extends DolibarrModules
 		$this->editor_name = 'iooner for LgHS';
 		$this->editor_url = 'https://github.com/LgHS/Docclibarr';
 
-		$this->version = '0.2.11';
+		$this->version = '0.3.8';
 
 		$this->const_name = 'MAIN_MODULE_'.strtoupper($this->name);
 
@@ -153,7 +153,12 @@ class modDocclibarr extends DolibarrModules
 			'prefix' => '<i class="fas fa-envelope-open-text pictofixedwidth"></i>',
 			'mainmenu' => 'billing',
 			'leftmenu' => 'docclibarr',
-			'url' => '/docclibarr/list.php',
+			// Trouvé en conditions réelles : il faut le préfixe /custom/ explicite (absent
+			// de config_page_url qui a sa propre syntaxe "page@module" auto-résolue).
+			// list.php vit maintenant à la racine du module (voir 2026-09-02 : déplacé hors
+			// d'un sous-dossier docclibarr/ redondant qui causait un 404 sur ce lien de
+			// menu ET un lien cassé dans dol_buildpath() côté list.php/card.php).
+			'url' => '/custom/docclibarr/list.php',
 			'langs' => 'docclibarr@docclibarr',
 			'position' => 100,
 			'enabled' => '1',

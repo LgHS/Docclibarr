@@ -126,13 +126,50 @@ class FacturationElectroniqueStaging extends CommonObject
 	}
 
 	/**
+	 * SQL brut plutôt que fetchCommon() : même famille de méthodes CommonObject que
+	 * fetchAllCommon(), qui s'est révélée peu fiable sur cette instance (voir fetchAll()
+	 * ci-dessous). Les valeurs sont castées explicitement (int/null) pour que les
+	 * comparaisons strictes (===, in_array(..., true)) fonctionnent correctement chez les
+	 * appelants (voir document.php), une base de données renvoie tout en chaîne par défaut.
+	 *
 	 * @param int         $id  Id à charger
 	 * @param string|null $ref Non utilisé (pas de référence métier sur cette table)
 	 * @return int 1 si trouvé, 0 si absent, <0 si erreur
 	 */
 	public function fetch($id, $ref = null)
 	{
-		return $this->fetchCommon($id, $ref);
+		$id = (int) $id;
+		if ($id <= 0) {
+			return 0;
+		}
+
+		$fieldNames = array_keys($this->fields);
+
+		$sql = "SELECT ".implode(', ', $fieldNames);
+		$sql .= " FROM ".MAIN_DB_PREFIX.$this->table_element;
+		$sql .= " WHERE rowid = ".$id;
+
+		$resql = $this->db->query($sql);
+		if (!$resql) {
+			return -1;
+		}
+		if ($this->db->num_rows($resql) === 0) {
+			return 0;
+		}
+
+		$obj = $this->db->fetch_object($resql);
+
+		$intFields = array('rowid', 'entity', 'origin_verified', 'eml_ecm_file_id', 'pdf_ecm_file_id', 'xml_ecm_file_id', 'matched_object_id', 'validated_by');
+
+		foreach ($fieldNames as $field) {
+			$value = property_exists($obj, $field) ? $obj->$field : null;
+			if ($value !== null && in_array($field, $intFields, true)) {
+				$value = (int) $value;
+			}
+			$this->$field = $value;
+		}
+
+		return 1;
 	}
 
 	/**
@@ -156,17 +193,61 @@ class FacturationElectroniqueStaging extends CommonObject
 	}
 
 	/**
-	 * @param string $sortorder  Sens de tri
-	 * @param string $sortfield  Champ de tri
-	 * @param int    $limit      Limite
+	 * SQL brut plutôt que fetchAllCommon() : trouvé en conditions réelles que
+	 * fetchAllCommon() provoque une erreur fatale non rattrapable même par
+	 * catch (\Throwable), sur cette instance précise. Même approche déjà utilisée avec
+	 * succès ailleurs dans le module (stagingRecordExists(), InvoiceMatcher::findCandidates()).
+	 *
+	 * @param string $sortorder  Sens de tri ('ASC' ou 'DESC')
+	 * @param string $sortfield  Champ de tri (jamais une valeur utilisateur dans ce module,
+	 *                            toujours un nom de colonne codé en dur côté appelant)
+	 * @param int    $limit      Limite (0 = pas de limite)
 	 * @param int    $offset     Offset
-	 * @param array  $filter     Filtres, ex: array('match_status' => 'pending')
-	 * @param string $filtermode Mode de combinaison des filtres
-	 * @return array|int Tableau d'objets, ou <0 si erreur
+	 * @param array  $filter     Filtres d'égalité, ex: array('match_status' => 'pending')
+	 * @param string $filtermode Mode de combinaison des filtres ('AND' ou 'OR')
+	 * @return array<int, self>|int Tableau d'objets, ou <0 si erreur
 	 */
 	public function fetchAll($sortorder = '', $sortfield = '', $limit = 0, $offset = 0, array $filter = array(), $filtermode = 'AND')
 	{
-		return $this->fetchAllCommon($sortorder, $sortfield, $limit, $offset, $filter, $filtermode);
+		$fieldNames = array_keys($this->fields);
+
+		$sql = "SELECT ".implode(', ', $fieldNames);
+		$sql .= " FROM ".MAIN_DB_PREFIX.$this->table_element;
+
+		$where = array();
+		foreach ($filter as $field => $value) {
+			if (!in_array($field, $fieldNames, true)) {
+				continue;
+			}
+			$where[] = $field." = '".$this->db->escape($value)."'";
+		}
+		if (!empty($where)) {
+			$sql .= " WHERE ".implode(' '.($filtermode === 'OR' ? 'OR' : 'AND').' ', $where);
+		}
+
+		if ($sortfield !== '' && in_array($sortfield, $fieldNames, true)) {
+			$sql .= " ORDER BY ".$sortfield." ".($sortorder === 'ASC' ? 'ASC' : 'DESC');
+		}
+
+		if ($limit > 0) {
+			$sql .= $this->db->plimit($limit, $offset);
+		}
+
+		$resql = $this->db->query($sql);
+		if (!$resql) {
+			return -1;
+		}
+
+		$records = array();
+		while ($obj = $this->db->fetch_object($resql)) {
+			$record = new self($this->db);
+			foreach ($fieldNames as $field) {
+				$record->$field = property_exists($obj, $field) ? $obj->$field : null;
+			}
+			$records[] = $record;
+		}
+
+		return $records;
 	}
 
 	/**

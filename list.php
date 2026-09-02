@@ -34,7 +34,7 @@ if (!$res) {
 	die("Impossible de trouver main.inc.php de Dolibarr");
 }
 
-require_once __DIR__.'/../class/facturationelectroniquestaging.class.php';
+require_once __DIR__.'/class/facturationelectroniquestaging.class.php';
 
 global $langs, $user, $conf, $db;
 
@@ -53,7 +53,20 @@ if ($statusFilter !== '') {
 	$filter['match_status'] = $statusFilter;
 }
 
-$records = $staging->fetchAll('DESC', 'email_received_at', 0, 0, $filter);
+// try/catch(\Throwable) : fetchAllCommon() (CommonObject) n'avait jamais pu être testée
+// contre une vraie instance jusqu'ici, contrairement au reste du pipeline d'ingestion.
+// Affiche l'erreur exacte au lieu d'un 500 générique si elle échoue, même filet de
+// sécurité déjà utile sur admin/setup.php.
+try {
+	$records = $staging->fetchAll('DESC', 'email_received_at', 0, 0, $filter);
+} catch (\Throwable $e) {
+	llxHeader('', $langs->trans("DocclibarrArea"));
+	print '<div class="error"><b>Erreur fatale : '.get_class($e).' : '.dol_escape_htmltag($e->getMessage()).'</b>';
+	print '<br>Fichier : '.dol_escape_htmltag($e->getFile()).' ligne '.((int) $e->getLine());
+	print '</div>';
+	llxFooter();
+	exit;
+}
 
 // Mapping explicite plutôt qu'une transformation de chaîne du statut : plus robuste et
 // plus lisible que de reconstruire une clé de langue à la volée (bug déjà rencontré ici
@@ -116,7 +129,7 @@ if (is_array($records) && count($records) > 0) {
 
 		$confidenceLabel = isset($matchConfidenceLangKeys[$record->match_confidence])
 			? $langs->trans($matchConfidenceLangKeys[$record->match_confidence])
-			: '';
+			: $langs->trans("DocclibarrMatchConfidenceNone");
 
 		$documentTypeLabel = isset($documentTypeLangKeys[$record->document_type])
 			? $langs->trans($documentTypeLangKeys[$record->document_type])

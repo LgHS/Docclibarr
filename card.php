@@ -42,7 +42,7 @@ if (!$res) {
 	die("Impossible de trouver main.inc.php de Dolibarr");
 }
 
-require_once __DIR__.'/../class/facturationelectroniquestaging.class.php';
+require_once __DIR__.'/class/facturationelectroniquestaging.class.php';
 
 // Vérifiés avec file_exists() avant tout require_once : un require_once sur un chemin
 // Dolibarr incorrect est un échec fatal PHP non rattrapable (déjà rencontré une fois
@@ -52,6 +52,7 @@ $cardRequiredPaths = array(
 	DOL_DOCUMENT_ROOT.'/fourn/class/fournisseur.facture.class.php',
 	DOL_DOCUMENT_ROOT.'/societe/class/societe.class.php',
 	DOL_DOCUMENT_ROOT.'/ecm/class/ecmfiles.class.php',
+	DOL_DOCUMENT_ROOT.'/core/class/html.form.class.php',
 );
 $cardMissingPaths = array_filter($cardRequiredPaths, function ($path) {
 	return !file_exists($path);
@@ -64,6 +65,7 @@ if (!empty($cardMissingPaths)) {
 require_once DOL_DOCUMENT_ROOT.'/fourn/class/fournisseur.facture.class.php';
 require_once DOL_DOCUMENT_ROOT.'/societe/class/societe.class.php';
 require_once DOL_DOCUMENT_ROOT.'/ecm/class/ecmfiles.class.php';
+require_once DOL_DOCUMENT_ROOT.'/core/class/html.form.class.php';
 
 global $langs, $user, $conf, $db;
 
@@ -73,7 +75,9 @@ if (!$user->rights->docclibarr->read) {
 	accessforbidden();
 }
 
-$id = GETPOST('id', 'int');
+// Cast explicite : GETPOST('...', 'int') ne garantit pas un vrai type int en sortie sur
+// cette instance (trouvé en conditions réelles sur document.php, même remarque ici).
+$id = (int) GETPOST('id', 'int');
 $action = GETPOST('action', 'aZ09');
 
 $staging = new FacturationElectroniqueStaging($db);
@@ -136,7 +140,7 @@ if ($action === 'validate_proposal' && !$alreadyProcessed) {
 	if (!$user->rights->docclibarr->validate) {
 		accessforbidden();
 	}
-	$manualId = GETPOST('supplier_invoice_id', 'int');
+	$manualId = (int) GETPOST('supplier_invoice_id', 'int');
 	$targetInvoice = new FactureFournisseur($db);
 	if ($manualId <= 0 || $targetInvoice->fetch($manualId) <= 0) {
 		setEventMessages("Facture fournisseur introuvable (id ".((int) $manualId).")", null, 'errors');
@@ -159,7 +163,7 @@ if ($action === 'validate_proposal' && !$alreadyProcessed) {
 		// on refuse aussi l'action côté serveur si elle est soumise quand même.
 		setEventMessages("Impossible de créer un brouillon de facture depuis une note de crédit", null, 'errors');
 	} else {
-		$thirdPartyId = GETPOST('third_party_id', 'int');
+		$thirdPartyId = (int) GETPOST('third_party_id', 'int');
 		$thirdParty = new Societe($db);
 
 		if ($thirdPartyId <= 0 || $thirdParty->fetch($thirdPartyId) <= 0) {
@@ -169,6 +173,9 @@ if ($action === 'validate_proposal' && !$alreadyProcessed) {
 			$newInvoice->socid = $thirdParty->id;
 			$newInvoice->ref_supplier = $staging->payment_ref_raw !== null ? $staging->payment_ref_raw : $staging->invoice_number;
 			$newInvoice->date = $staging->issue_date !== null ? strtotime($staging->issue_date) : dol_now();
+			if ($staging->due_date !== null) {
+				$newInvoice->date_echeance = strtotime($staging->due_date);
+			}
 			$newInvoice->label = "Facture ".$staging->supplier_name." n°".$staging->invoice_number;
 
 			$newInvoiceId = $newInvoice->create($user);
@@ -176,6 +183,22 @@ if ($action === 'validate_proposal' && !$alreadyProcessed) {
 			if ($newInvoiceId <= 0) {
 				setEventMessages(implode(' ; ', $newInvoice->errors), null, 'errors');
 			} else {
+				// Une facture sans ligne n'a aucun montant : ajoute une ligne unique avec
+				// le HT extrait et le taux de TVA déduit de HT/TTC (une seule ligne, une
+				// seule TVA, laissé au brouillon à corriger à la main si la vraie facture
+				// a plusieurs lignes ou plusieurs taux, voir SPEC.md section 10 : le
+				// brouillon est pré-rempli, pas figé).
+				$vatRate = 0;
+				if (!empty($staging->amount_ht) && $staging->amount_ttc !== null) {
+					$vatRate = round((($staging->amount_ttc / $staging->amount_ht) - 1) * 100, 2);
+				}
+				$lineDesc = $staging->invoice_number !== null ? "Facture ".$staging->invoice_number : $staging->supplier_name;
+				$lineResult = $newInvoice->addline($lineDesc, $staging->amount_ht, $vatRate, 0, 0, 1);
+
+				if ($lineResult <= 0) {
+					setEventMessages("Brouillon créé mais échec de l'ajout de la ligne : ".implode(' ; ', $newInvoice->errors), null, 'errors');
+				}
+
 				$result = $staging->markValidated($user, 'invoice_supplier', $newInvoiceId);
 				if ($result > 0) {
 					docclibarr_relink_ecm_files($db, $staging, 'invoice_supplier', $newInvoiceId);
@@ -233,7 +256,15 @@ print '<tr><td>'.$langs->trans("DocclibarrAmountTTC").'</td><td>'.($staging->amo
 print '<tr><td>Communication</td><td>'.dol_escape_htmltag($staging->payment_ref_raw).'</td></tr>';
 print '<tr><td>IBAN</td><td>'.dol_escape_htmltag($staging->payee_iban).'</td></tr>';
 print '<tr><td>'.$langs->trans("DocclibarrOriginStatus").'</td><td>'.($staging->origin_verified ? $langs->trans("DocclibarrOriginVerified") : $langs->trans("DocclibarrOriginQuarantine")).'</td></tr>';
-print '<tr><td>'.$langs->trans("DocclibarrMatchConfidence").'</td><td>'.($staging->match_confidence !== null ? dol_escape_htmltag($staging->match_confidence) : '').'</td></tr>';
+$cardMatchConfidenceLangKeys = array(
+	'high' => 'DocclibarrMatchConfidenceHigh',
+	'medium' => 'DocclibarrMatchConfidenceMedium',
+	'suspect' => 'DocclibarrMatchConfidenceSuspect',
+);
+$cardConfidenceLabel = isset($cardMatchConfidenceLangKeys[$staging->match_confidence])
+	? $langs->trans($cardMatchConfidenceLangKeys[$staging->match_confidence])
+	: $langs->trans("DocclibarrMatchConfidenceNone");
+print '<tr><td>'.$langs->trans("DocclibarrMatchConfidence").'</td><td>'.$cardConfidenceLabel.'</td></tr>';
 print '</table>';
 
 // Prévisualisation (voir SPEC.md section 11)
@@ -249,6 +280,8 @@ if (!empty($staging->xml_ecm_file_id)) {
 print '</div>';
 
 if (!$alreadyProcessed && $user->rights->docclibarr->validate) {
+	$form = new Form($db);
+
 	// Action 1 : valider la proposition telle quelle
 	print '<div class="marginTopOnly"><h3>'.$langs->trans("DocclibarrProposedMatch").'</h3>';
 	if (!empty($staging->matched_object_id)) {
@@ -266,13 +299,60 @@ if (!$alreadyProcessed && $user->rights->docclibarr->validate) {
 	}
 	print '</div>';
 
-	// Action 2 : rattacher manuellement
+	// Action 2 : rattacher manuellement à une facture fournisseur déjà existante dans
+	// Dolibarr. Liste déroulante plutôt qu'un id à deviner/taper : d'abord les factures
+	// du même tiers (même TVA fournisseur que l'extraction XML) si elles existent, sinon
+	// les plus récentes toutes tiers confondus, pour ne jamais laisser le champ vide.
 	print '<div class="marginTopOnly"><h3>'.$langs->trans("DocclibarrManualAttach").'</h3>';
+
+	$candidateInvoices = array();
+	if (!empty($staging->supplier_vat)) {
+		$sqlCandidates = "SELECT f.rowid, f.ref, f.ref_supplier, f.total_ttc, s.nom as supplier_name";
+		$sqlCandidates .= " FROM ".MAIN_DB_PREFIX."facture_fourn as f";
+		$sqlCandidates .= " INNER JOIN ".MAIN_DB_PREFIX."societe as s ON s.rowid = f.fk_soc";
+		$sqlCandidates .= " WHERE s.tva_intra = '".$db->escape($staging->supplier_vat)."'";
+		$sqlCandidates .= " ORDER BY f.datef DESC";
+		$sqlCandidates .= $db->plimit(20);
+		$resqlCandidates = $db->query($sqlCandidates);
+		if ($resqlCandidates) {
+			while ($objCandidate = $db->fetch_object($resqlCandidates)) {
+				$candidateInvoices[] = $objCandidate;
+			}
+		}
+	}
+
+	if (empty($candidateInvoices)) {
+		// Aucune facture du même tiers (ou TVA non extraite) : repli sur les plus
+		// récentes toutes tiers confondus, mieux que rien pour chercher visuellement.
+		$sqlCandidates = "SELECT f.rowid, f.ref, f.ref_supplier, f.total_ttc, s.nom as supplier_name";
+		$sqlCandidates .= " FROM ".MAIN_DB_PREFIX."facture_fourn as f";
+		$sqlCandidates .= " INNER JOIN ".MAIN_DB_PREFIX."societe as s ON s.rowid = f.fk_soc";
+		$sqlCandidates .= " ORDER BY f.datef DESC";
+		$sqlCandidates .= $db->plimit(20);
+		$resqlCandidates = $db->query($sqlCandidates);
+		if ($resqlCandidates) {
+			while ($objCandidate = $db->fetch_object($resqlCandidates)) {
+				$candidateInvoices[] = $objCandidate;
+			}
+		}
+	}
+
 	print '<form method="POST" action="'.$_SERVER["PHP_SELF"].'?id='.$id.'">';
 	print '<input type="hidden" name="token" value="'.newToken().'">';
 	print '<input type="hidden" name="action" value="manual_attach">';
-	print $langs->trans("DocclibarrSupplierInvoiceId").' <input type="text" name="supplier_invoice_id" size="10">';
-	print ' <input type="submit" class="button" value="'.$langs->trans("DocclibarrAttach").'">';
+	print $langs->trans("DocclibarrSupplierInvoiceId").' ';
+
+	if (empty($candidateInvoices)) {
+		print '(aucune facture fournisseur trouvée dans Dolibarr)';
+	} else {
+		$invoiceOptions = array();
+		foreach ($candidateInvoices as $candidate) {
+			$invoiceOptions[$candidate->rowid] = $candidate->ref.' ('.$candidate->supplier_name.($candidate->ref_supplier !== null ? ', réf. fourn. '.$candidate->ref_supplier : '').', '.price($candidate->total_ttc).')';
+		}
+		print $form->selectarray('supplier_invoice_id', $invoiceOptions, '', 1, 0, 0, '', 0, 0, 0, '', 'minwidth300');
+		print ' <input type="submit" class="button" value="'.$langs->trans("DocclibarrAttach").'">';
+	}
+
 	print '</form></div>';
 
 	// Action 3 : créer un brouillon (n'a pas de sens pour une note de crédit, qui annule
@@ -283,7 +363,24 @@ if (!$alreadyProcessed && $user->rights->docclibarr->validate) {
 		print '<form method="POST" action="'.$_SERVER["PHP_SELF"].'?id='.$id.'">';
 		print '<input type="hidden" name="token" value="'.newToken().'">';
 		print '<input type="hidden" name="action" value="create_draft">';
-		print $langs->trans("DocclibarrThirdPartyId").' <input type="text" name="third_party_id" size="10">';
+		print $langs->trans("DocclibarrThirdPartyId").' ';
+
+		// Pré-sélection si un tiers existant correspond déjà à la TVA extraite du XML,
+		// simple confort, l'utilisateur reste libre de choisir un autre tiers dans la liste.
+		$preselectedThirdPartyId = 0;
+		if (!empty($staging->supplier_vat)) {
+			$sqlThirdParty = "SELECT rowid FROM ".MAIN_DB_PREFIX."societe WHERE tva_intra = '".$db->escape($staging->supplier_vat)."'";
+			$resqlThirdParty = $db->query($sqlThirdParty);
+			if ($resqlThirdParty && $db->num_rows($resqlThirdParty) > 0) {
+				$objThirdParty = $db->fetch_object($resqlThirdParty);
+				$preselectedThirdPartyId = (int) $objThirdParty->rowid;
+			}
+		}
+
+		// Filtré aux tiers marqués fournisseurs (s.fournisseur=1), cohérent avec l'objet
+		// créé (une facture fournisseur).
+		print $form->select_company($preselectedThirdPartyId, 'third_party_id', 's.fournisseur=1', 1, 0, 0, array(), 0, 'minwidth300');
+
 		print ' <input type="submit" class="button" value="'.$langs->trans("DocclibarrCreate").'">';
 		print '</form></div>';
 	}

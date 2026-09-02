@@ -317,6 +317,27 @@ class IngestionWorker
 	}
 
 	/**
+	 * @param string $relativeDir Chemin relatif (colonne filepath de llx_ecm_files)
+	 * @param string $filename
+	 * @return int|null Id de l'enregistrement existant, null si aucun
+	 */
+	protected function findExistingEcmFileId($relativeDir, $filename)
+	{
+		$sql = "SELECT rowid FROM ".MAIN_DB_PREFIX."ecm_files";
+		$sql .= " WHERE filepath = '".$this->db->escape($relativeDir)."'";
+		$sql .= " AND filename = '".$this->db->escape($filename)."'";
+
+		$resql = $this->db->query($sql);
+		if (!$resql || $this->db->num_rows($resql) === 0) {
+			return null;
+		}
+
+		$obj = $this->db->fetch_object($resql);
+
+		return $obj ? (int) $obj->rowid : null;
+	}
+
+	/**
 	 * @param string $rawEml
 	 * @return string|null
 	 */
@@ -376,12 +397,23 @@ class IngestionWorker
 		$relativeDir = 'docclibarr/'.dol_print_date(dol_now(), '%Y/%m');
 		$fullDir = DOL_DATA_ROOT.'/'.$relativeDir;
 
-		if (!dol_is_dir($fullDir)) {
-			dol_mkdir($fullDir);
-		}
+		// dol_is_dir() n'existe pas dans Dolibarr (contrairement à dol_is_file(), voir
+		// document.php), trouvé en conditions réelles : Call to undefined function. Pas
+		// besoin de vérifier avant d'appeler dol_mkdir() de toute façon, elle est prévue
+		// pour être idempotente (ne fait rien si le dossier existe déjà).
+		dol_mkdir($fullDir);
 
 		$filename = dol_sanitizeFileName($filename);
 		$fullPath = $fullDir.'/'.$filename;
+
+		// Idempotent : si un enregistrement ECM existe déjà pour ce chemin exact, le
+		// réutiliser plutôt que de retenter un create() qui échouerait sur la contrainte
+		// unique (uk_ecm_files), rencontré en conditions réelles après un premier essai
+		// resté partiellement en base malgré une erreur retournée.
+		$existingId = $this->findExistingEcmFileId($relativeDir, $filename);
+		if ($existingId !== null) {
+			return $existingId;
+		}
 
 		$written = file_put_contents($fullPath, $content);
 		if ($written === false) {
@@ -397,10 +429,18 @@ class IngestionWorker
 		$ecmfile->gen_or_uploaded = 'unknown';
 		$ecmfile->description = '';
 		$ecmfile->keywords = '';
+		// Gestion multi-société Dolibarr : souvent une contrainte NOT NULL sans valeur par
+		// défaut compatible sur ce genre de table, jamais renseigné jusqu'ici.
+		$ecmfile->entity = $conf->entity;
 
 		$result = $ecmfile->create($GLOBALS['user'] ?? null);
 		if ($result <= 0) {
-			$this->errors[] = "Échec d'indexation ECM du fichier ".$filename;
+			// Capture le détail réel de l'échec plutôt qu'un message générique : EcmFiles,
+			// comme la plupart des classes Dolibarr, expose ->error et/ou ->errors après un
+			// échec de create(), jamais exploité jusqu'ici faute d'avoir pu tester contre
+			// une vraie instance.
+			$detail = !empty($ecmfile->error) ? $ecmfile->error : (!empty($ecmfile->errors) ? implode(' ; ', (array) $ecmfile->errors) : '(aucun détail disponible)');
+			$this->errors[] = "Échec d'indexation ECM du fichier ".$filename." : ".$detail;
 			return null;
 		}
 
