@@ -208,6 +208,7 @@ class IngestionWorker
 			return;
 		}
 
+		$staging->document_type = $data['document_type'];
 		$staging->supplier_vat = $data['supplier_vat'];
 		$staging->supplier_name = $data['supplier_name'];
 		$staging->customer_vat = $data['customer_vat'];
@@ -222,19 +223,37 @@ class IngestionWorker
 		$staging->payee_iban = $data['payee_iban'];
 
 		// Garde-fou anti-usurpation (voir SPEC.md section 6, 12 et 13) : si la TVA client
-		// du XML ne correspond pas au numéro de TVA de l'entreprise, le message est
-		// signalé comme suspect et JAMAIS soumis au moteur de matching, même si l'origine
-		// du mail est par ailleurs vérifiée. Pas de colonne dédiée dans le schéma pour ce
-		// signal, réutilise match_confidence à 'suspect' (même logique de réutilisation de
-		// champ que DoliFius sur num_chq, voir la mémoire
+		// du XML est présente mais ne correspond PAS au numéro de TVA de l'entreprise, le
+		// message est signalé comme suspect et JAMAIS soumis au moteur de matching, même
+		// si l'origine du mail est par ailleurs vérifiée. Pas de colonne dédiée dans le
+		// schéma pour ce signal, réutilise match_confidence à 'suspect' (même logique de
+		// réutilisation de champ que DoliFius sur num_chq, voir la mémoire
 		// reference_dolifius_dolibarr_conventions).
+		//
+		// Correction du 2026-09-02, sur pièce réelle : la spec supposait ce champ
+		// toujours présent, un vrai XML Doccle (PULP Brasserie Urbaine) l'a montré absent
+		// (AccountingCustomerParty/PartyTaxScheme/CompanyID vide). Une TVA absente n'est
+		// pas une usurpation, juste une donnée non vérifiable : ne déclenche donc plus le
+		// statut suspect, seul un vrai désaccord (présent ET différent) le fait.
 		global $mysoc;
 		$ownVat = isset($mysoc) ? InvoiceMatcher::normalizeVat($mysoc->tva_intra) : null;
 		$customerVat = InvoiceMatcher::normalizeVat($data['customer_vat']);
 
-		if ($ownVat !== null && $customerVat !== $ownVat) {
+		if ($ownVat !== null && $customerVat !== null && $customerVat !== $ownVat) {
 			$staging->match_status = FacturationElectroniqueStaging::STATUS_UNMATCHED;
 			$staging->match_confidence = 'suspect';
+			$this->createStagingRecord($staging, $user);
+			return;
+		}
+
+		// Les notes de crédit (annulation/correction d'une facture déjà émise, voir
+		// UblInvoiceParser) ne passent jamais par le moteur de matching automatique : sa
+		// logique de cascade est pensée pour rattacher une facture entrante à une facture
+		// fournisseur Dolibarr, pas pour retrouver la facture originale qu'une note de
+		// crédit annule. Toujours en file manuelle pour l'instant (voir SPEC.md section 6
+		// et 8, ajouté le 2026-09-02 sur pièce réelle).
+		if ($staging->document_type === UblInvoiceParser::DOCUMENT_TYPE_CREDIT_NOTE) {
+			$staging->match_status = FacturationElectroniqueStaging::STATUS_UNMATCHED;
 			$this->createStagingRecord($staging, $user);
 			return;
 		}

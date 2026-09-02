@@ -18,6 +18,7 @@ use PHPUnit\Framework\TestCase;
 class UblInvoiceParserTest extends TestCase
 {
 	const NS_INVOICE = 'urn:oasis:names:specification:ubl:schema:xsd:Invoice-2';
+	const NS_CREDIT_NOTE = 'urn:oasis:names:specification:ubl:schema:xsd:CreditNote-2';
 	const NS_CBC = 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2';
 	const NS_CAC = 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2';
 	const EXPECTED_CUSTOMIZATION_ID = 'urn:cen.eu:en16931:2017#compliant#urn:fdc:peppol.eu:2017:poacc:billing:3.0';
@@ -90,12 +91,62 @@ class UblInvoiceParserTest extends TestCase
 		$data = $parser->parse($this->pironStyleXml());
 
 		$this->assertNotNull($data);
+		$this->assertSame(UblInvoiceParser::DOCUMENT_TYPE_INVOICE, $data['document_type']);
 		$this->assertSame('FA2026-0421', $data['invoice_number']);
 		$this->assertSame('BE0123456789', $data['supplier_vat']);
 		$this->assertSame(121.00, $data['amount_ttc']);
 		$this->assertSame('+++111/2222/33333+++', $data['payment_ref_raw']);
 		$this->assertSame('111222233333', $data['payment_ref_normalized']);
 		$this->assertSame('BE00123412341234', $data['payee_iban']);
+	}
+
+	/**
+	 * Style réel rencontré le 2026-09-02 (annulation de facture reçue via Doccle) : un
+	 * CreditNote plutôt qu'un Invoice. Valeurs ci-dessous entièrement fictives.
+	 */
+	protected function creditNoteStyleXml()
+	{
+		return '<?xml version="1.0" encoding="UTF-8"?>'
+			.'<CreditNote xmlns="'.self::NS_CREDIT_NOTE.'" xmlns:cbc="'.self::NS_CBC.'" xmlns:cac="'.self::NS_CAC.'">'
+			.'<cbc:CustomizationID>'.self::EXPECTED_CUSTOMIZATION_ID.'</cbc:CustomizationID>'
+			.'<cbc:ID>AV-2026-0007</cbc:ID>'
+			.'<cbc:IssueDate>2026-08-12</cbc:IssueDate>'
+			.'<cbc:DocumentCurrencyCode>EUR</cbc:DocumentCurrencyCode>'
+			.'<cac:AccountingSupplierParty><cac:Party>'
+			.'<cac:PartyName><cbc:Name>Fournisseur Eau SC</cbc:Name></cac:PartyName>'
+			.'<cac:PartyTaxScheme><cbc:CompanyID>BE0345678901</cbc:CompanyID></cac:PartyTaxScheme>'
+			.'</cac:Party></cac:AccountingSupplierParty>'
+			.'<cac:AccountingCustomerParty><cac:Party>'
+			.'<cac:PartyTaxScheme><cbc:CompanyID>BE0987654321</cbc:CompanyID></cac:PartyTaxScheme>'
+			.'</cac:Party></cac:AccountingCustomerParty>'
+			.'<cac:LegalMonetaryTotal>'
+			.'<cbc:TaxExclusiveAmount>40.00</cbc:TaxExclusiveAmount>'
+			.'<cbc:PayableAmount>44.00</cbc:PayableAmount>'
+			.'</cac:LegalMonetaryTotal>'
+			.'</CreditNote>';
+	}
+
+	public function testParsesCreditNote()
+	{
+		$parser = new UblInvoiceParser();
+		$data = $parser->parse($this->creditNoteStyleXml());
+
+		$this->assertNotNull($data);
+		$this->assertSame(UblInvoiceParser::DOCUMENT_TYPE_CREDIT_NOTE, $data['document_type']);
+		$this->assertSame('AV-2026-0007', $data['invoice_number']);
+		$this->assertSame(44.00, $data['amount_ttc']);
+		// Pas de notion d'échéance sur une note de crédit.
+		$this->assertNull($data['due_date']);
+	}
+
+	public function testCreditNoteWithoutExpectedCustomizationIdIsRejected()
+	{
+		$xml = str_replace(self::EXPECTED_CUSTOMIZATION_ID, 'urn:something:else', $this->creditNoteStyleXml());
+
+		$parser = new UblInvoiceParser();
+		$data = $parser->parse($xml);
+
+		$this->assertNull($data);
 	}
 
 	public function testUsesPayableAmountNotTaxInclusiveAmount()

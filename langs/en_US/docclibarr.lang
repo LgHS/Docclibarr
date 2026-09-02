@@ -6,6 +6,9 @@ Module109501Desc = Ingestion of Doccle e-invoices (Peppol/UBL) received by email
 
 DocclibarrArea = Doccle e-invoices
 DocclibarrList = Received e-invoices
+DocclibarrDocumentType = Type
+DocclibarrDocumentTypeInvoice = Invoice
+DocclibarrDocumentTypeCreditNote = Credit note
 DocclibarrSupplier = Supplier
 DocclibarrInvoiceNumber = Invoice number
 DocclibarrAmountTTC = Amount incl. VAT

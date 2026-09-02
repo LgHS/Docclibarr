@@ -75,6 +75,12 @@ $matchConfidenceLangKeys = array(
 	'suspect' => 'DocclibarrMatchConfidenceSuspect',
 );
 
+// Idem pour le type de document (facture ou note de crédit, voir UblInvoiceParser).
+$documentTypeLangKeys = array(
+	'invoice' => 'DocclibarrDocumentTypeInvoice',
+	'credit_note' => 'DocclibarrDocumentTypeCreditNote',
+);
+
 llxHeader('', $langs->trans("DocclibarrArea"));
 
 print load_fiche_titre($langs->trans("DocclibarrArea"), '', 'docclibarr@docclibarr');
@@ -92,6 +98,7 @@ print '</form>';
 
 print '<table class="liste centpercent">';
 print '<tr class="liste_titre">';
+print '<td>'.$langs->trans("DocclibarrDocumentType").'</td>';
 print '<td>'.$langs->trans("DocclibarrSupplier").'</td>';
 print '<td>'.$langs->trans("DocclibarrInvoiceNumber").'</td>';
 print '<td class="right">'.$langs->trans("DocclibarrAmountTTC").'</td>';
@@ -111,7 +118,12 @@ if (is_array($records) && count($records) > 0) {
 			? $langs->trans($matchConfidenceLangKeys[$record->match_confidence])
 			: '';
 
+		$documentTypeLabel = isset($documentTypeLangKeys[$record->document_type])
+			? $langs->trans($documentTypeLangKeys[$record->document_type])
+			: dol_escape_htmltag($record->document_type);
+
 		print '<tr class="oddeven">';
+		print '<td>'.$documentTypeLabel.'</td>';
 		print '<td>'.dol_escape_htmltag($record->supplier_name).'</td>';
 		print '<td>'.dol_escape_htmltag($record->invoice_number).'</td>';
 		print '<td class="right">'.($record->amount_ttc !== null ? price($record->amount_ttc) : '').'</td>';
@@ -122,7 +134,7 @@ if (is_array($records) && count($records) > 0) {
 		print '</tr>';
 	}
 } else {
-	print '<tr><td colspan="7">'.$langs->trans("None").'</td></tr>';
+	print '<tr><td colspan="8">'.$langs->trans("None").'</td></tr>';
 }
 
 print '</table>';

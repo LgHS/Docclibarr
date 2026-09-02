@@ -136,29 +136,35 @@ if ($action === 'validate_proposal' && !$alreadyProcessed) {
 		accessforbidden();
 	}
 
-	$thirdPartyId = GETPOST('third_party_id', 'int');
-	$thirdParty = new Societe($db);
-
-	if ($thirdPartyId <= 0 || $thirdParty->fetch($thirdPartyId) <= 0) {
-		setEventMessages($langs->trans("DocclibarrCreateDraftMissingThirdParty"), null, 'errors');
+	if ($staging->document_type === 'credit_note') {
+		// Défense en profondeur : le bouton est déjà masqué pour une note de crédit, mais
+		// on refuse aussi l'action côté serveur si elle est soumise quand même.
+		setEventMessages("Impossible de créer un brouillon de facture depuis une note de crédit", null, 'errors');
 	} else {
-		$newInvoice = new FactureFournisseur($db);
-		$newInvoice->socid = $thirdParty->id;
-		$newInvoice->ref_supplier = $staging->payment_ref_raw !== null ? $staging->payment_ref_raw : $staging->invoice_number;
-		$newInvoice->date = $staging->issue_date !== null ? strtotime($staging->issue_date) : dol_now();
-		$newInvoice->label = "Facture ".$staging->supplier_name." n°".$staging->invoice_number;
+		$thirdPartyId = GETPOST('third_party_id', 'int');
+		$thirdParty = new Societe($db);
 
-		$newInvoiceId = $newInvoice->create($user);
-
-		if ($newInvoiceId <= 0) {
-			setEventMessages(implode(' ; ', $newInvoice->errors), null, 'errors');
+		if ($thirdPartyId <= 0 || $thirdParty->fetch($thirdPartyId) <= 0) {
+			setEventMessages($langs->trans("DocclibarrCreateDraftMissingThirdParty"), null, 'errors');
 		} else {
-			$result = $staging->markValidated($user, 'invoice_supplier', $newInvoiceId);
-			if ($result > 0) {
-				docclibarr_relink_ecm_files($db, $staging, 'invoice_supplier', $newInvoiceId);
-				setEventMessages($langs->trans("RecordSaved"), null);
+			$newInvoice = new FactureFournisseur($db);
+			$newInvoice->socid = $thirdParty->id;
+			$newInvoice->ref_supplier = $staging->payment_ref_raw !== null ? $staging->payment_ref_raw : $staging->invoice_number;
+			$newInvoice->date = $staging->issue_date !== null ? strtotime($staging->issue_date) : dol_now();
+			$newInvoice->label = "Facture ".$staging->supplier_name." n°".$staging->invoice_number;
+
+			$newInvoiceId = $newInvoice->create($user);
+
+			if ($newInvoiceId <= 0) {
+				setEventMessages(implode(' ; ', $newInvoice->errors), null, 'errors');
 			} else {
-				setEventMessages(implode(' ; ', $staging->errors), null, 'errors');
+				$result = $staging->markValidated($user, 'invoice_supplier', $newInvoiceId);
+				if ($result > 0) {
+					docclibarr_relink_ecm_files($db, $staging, 'invoice_supplier', $newInvoiceId);
+					setEventMessages($langs->trans("RecordSaved"), null);
+				} else {
+					setEventMessages(implode(' ; ', $staging->errors), null, 'errors');
+				}
 			}
 		}
 	}
@@ -195,8 +201,15 @@ if ($alreadyProcessed) {
 	print '<div class="info">'.sprintf($langs->trans("DocclibarrAlreadyProcessed"), $langs->trans('DocclibarrMatchStatus'.ucfirst($staging->match_status === 'validated' ? 'Validated' : 'Rejected'))).'</div>';
 }
 
+$documentTypeLangKeys = array(
+	'invoice' => 'DocclibarrDocumentTypeInvoice',
+	'credit_note' => 'DocclibarrDocumentTypeCreditNote',
+);
+$isCreditNote = ($staging->document_type === 'credit_note');
+
 print '<table class="border centpercent">';
-print '<tr><td class="titlefield">'.$langs->trans("DocclibarrSupplier").'</td><td>'.dol_escape_htmltag($staging->supplier_name).' ('.dol_escape_htmltag($staging->supplier_vat).')</td></tr>';
+print '<tr><td class="titlefield">'.$langs->trans("DocclibarrDocumentType").'</td><td>'.(isset($documentTypeLangKeys[$staging->document_type]) ? $langs->trans($documentTypeLangKeys[$staging->document_type]) : dol_escape_htmltag($staging->document_type)).'</td></tr>';
+print '<tr><td>'.$langs->trans("DocclibarrSupplier").'</td><td>'.dol_escape_htmltag($staging->supplier_name).' ('.dol_escape_htmltag($staging->supplier_vat).')</td></tr>';
 print '<tr><td>'.$langs->trans("DocclibarrInvoiceNumber").'</td><td>'.dol_escape_htmltag($staging->invoice_number).'</td></tr>';
 print '<tr><td>'.$langs->trans("DocclibarrAmountTTC").'</td><td>'.($staging->amount_ttc !== null ? price($staging->amount_ttc) : '').' '.dol_escape_htmltag($staging->currency).'</td></tr>';
 print '<tr><td>Communication</td><td>'.dol_escape_htmltag($staging->payment_ref_raw).'</td></tr>';
@@ -244,14 +257,18 @@ if (!$alreadyProcessed && $user->rights->docclibarr->validate) {
 	print ' <input type="submit" class="button" value="'.$langs->trans("DocclibarrAttach").'">';
 	print '</form></div>';
 
-	// Action 3 : créer un brouillon
-	print '<div class="marginTopOnly"><h3>'.$langs->trans("DocclibarrCreateDraft").'</h3>';
-	print '<form method="POST" action="'.$_SERVER["PHP_SELF"].'?id='.$id.'">';
-	print '<input type="hidden" name="token" value="'.newToken().'">';
-	print '<input type="hidden" name="action" value="create_draft">';
-	print $langs->trans("DocclibarrThirdPartyId").' <input type="text" name="third_party_id" size="10">';
-	print ' <input type="submit" class="button" value="'.$langs->trans("DocclibarrCreate").'">';
-	print '</form></div>';
+	// Action 3 : créer un brouillon (n'a pas de sens pour une note de crédit, qui annule
+	// une facture existante plutôt que d'en représenter une nouvelle, voir SPEC.md
+	// section 6 : seul le rattachement manuel à la facture originale s'applique dans ce cas).
+	if (!$isCreditNote) {
+		print '<div class="marginTopOnly"><h3>'.$langs->trans("DocclibarrCreateDraft").'</h3>';
+		print '<form method="POST" action="'.$_SERVER["PHP_SELF"].'?id='.$id.'">';
+		print '<input type="hidden" name="token" value="'.newToken().'">';
+		print '<input type="hidden" name="action" value="create_draft">';
+		print $langs->trans("DocclibarrThirdPartyId").' <input type="text" name="third_party_id" size="10">';
+		print ' <input type="submit" class="button" value="'.$langs->trans("DocclibarrCreate").'">';
+		print '</form></div>';
+	}
 
 	// Action 4 : rejeter avec motif
 	print '<div class="marginTopOnly"><h3>'.$langs->trans("DocclibarrRejectAction").'</h3>';

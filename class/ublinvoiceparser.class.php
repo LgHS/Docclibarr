@@ -16,8 +16,8 @@
  */
 
 /**
- * Extrait les données structurées d'une facture UBL 2.1 / Peppol BIS Billing 3.0 (voir
- * SPEC.md section 6).
+ * Extrait les données structurées d'une facture ou note de crédit UBL 2.1 / Peppol BIS
+ * Billing 3.0 (voir SPEC.md section 6).
  *
  * Aucune dépendance à Dolibarr : cette classe travaille sur le contenu XML brut, ce qui
  * permet de la tester entièrement sur des fixtures statiques (voir
@@ -27,14 +27,23 @@
  * les échantillons réels analysés montrent que l'ordre et l'ensemble exact des
  * déclarations xmlns:* varient d'un émetteur à l'autre sans que la structure logique
  * change.
+ *
+ * Support des notes de crédit ajouté le 2026-09-02 sur pièce réelle : un vrai email
+ * Doccle contenait une annulation de facture en `CreditNote` UBL plutôt qu'`Invoice`,
+ * jusque-là non prévue par la spec. Structure quasi identique à Invoice (mêmes champs
+ * cbc/cac), seul le nom de l'élément racine et son namespace changent.
  */
 class UblInvoiceParser
 {
 	const NS_INVOICE = 'urn:oasis:names:specification:ubl:schema:xsd:Invoice-2';
+	const NS_CREDIT_NOTE = 'urn:oasis:names:specification:ubl:schema:xsd:CreditNote-2';
 	const NS_CBC = 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2';
 	const NS_CAC = 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2';
 
-	/** CustomizationID attendu pour une facture Peppol BIS Billing 3.0 conforme EN16931 */
+	const DOCUMENT_TYPE_INVOICE = 'invoice';
+	const DOCUMENT_TYPE_CREDIT_NOTE = 'credit_note';
+
+	/** CustomizationID attendu pour un document Peppol BIS Billing 3.0 conforme EN16931 */
 	const EXPECTED_CUSTOMIZATION_ID = 'urn:cen.eu:en16931:2017#compliant#urn:fdc:peppol.eu:2017:poacc:billing:3.0';
 
 	/** @var string[] Raisons de l'échec, si parse() retourne null */
@@ -42,10 +51,12 @@ class UblInvoiceParser
 
 	/**
 	 * @param string $xmlContent Contenu XML brut de la pièce jointe
-	 * @return array<string, mixed>|null Données extraites, ou null si le XML n'est pas
-	 *                                    reconnu comme une facture Peppol BIS Billing 3.0
-	 *                                    conforme (part alors en file de traitement manuel,
-	 *                                    voir SPEC.md section 2 et 6, jamais parsé à l'aveugle)
+	 * @return array<string, mixed>|null Données extraites (avec une clé document_type,
+	 *                                    voir self::DOCUMENT_TYPE_*), ou null si le XML
+	 *                                    n'est reconnu ni comme facture ni comme note de
+	 *                                    crédit Peppol BIS Billing 3.0 conforme (part alors
+	 *                                    en file de traitement manuel, voir SPEC.md
+	 *                                    section 2 et 6, jamais parsé à l'aveugle)
 	 */
 	public function parse($xmlContent)
 	{
@@ -63,32 +74,53 @@ class UblInvoiceParser
 
 		$xpath = new DOMXPath($dom);
 		$xpath->registerNamespace('inv', self::NS_INVOICE);
+		$xpath->registerNamespace('cn', self::NS_CREDIT_NOTE);
 		$xpath->registerNamespace('cbc', self::NS_CBC);
 		$xpath->registerNamespace('cac', self::NS_CAC);
 
-		$customizationId = $this->queryString($xpath, '/inv:Invoice/cbc:CustomizationID');
-		if ($customizationId !== self::EXPECTED_CUSTOMIZATION_ID) {
-			$this->errors[] = "CustomizationID absent ou inattendu (\"".$customizationId."\"), XML non reconnu comme Peppol BIS Billing 3.0";
+		// Essaie Invoice, puis CreditNote : les deux partagent la même structure de
+		// champs cbc/cac, seul le nom et le namespace de l'élément racine changent.
+		$rootCandidates = array(
+			self::DOCUMENT_TYPE_INVOICE => 'inv:Invoice',
+			self::DOCUMENT_TYPE_CREDIT_NOTE => 'cn:CreditNote',
+		);
+
+		$documentType = null;
+		$rootPrefix = null;
+		foreach ($rootCandidates as $type => $prefix) {
+			$customizationId = $this->queryString($xpath, '/'.$prefix.'/cbc:CustomizationID');
+			if ($customizationId === self::EXPECTED_CUSTOMIZATION_ID) {
+				$documentType = $type;
+				$rootPrefix = $prefix;
+				break;
+			}
+		}
+
+		if ($documentType === null) {
+			$this->errors[] = "CustomizationID absent ou inattendu, XML non reconnu comme facture ou note de crédit Peppol BIS Billing 3.0";
 			return null;
 		}
 
-		$paymentRefRaw = $this->queryString($xpath, '/inv:Invoice/cac:PaymentMeans/cbc:PaymentID');
+		$paymentRefRaw = $this->queryString($xpath, '/'.$rootPrefix.'/cac:PaymentMeans/cbc:PaymentID');
 
 		return array(
-			'invoice_number' => $this->queryString($xpath, '/inv:Invoice/cbc:ID'),
-			'issue_date' => $this->queryString($xpath, '/inv:Invoice/cbc:IssueDate'),
-			'due_date' => $this->queryString($xpath, '/inv:Invoice/cbc:DueDate'),
-			'supplier_vat' => $this->queryString($xpath, '/inv:Invoice/cac:AccountingSupplierParty/cac:Party/cac:PartyTaxScheme/cbc:CompanyID'),
-			'supplier_name' => $this->queryString($xpath, '/inv:Invoice/cac:AccountingSupplierParty/cac:Party/cac:PartyName/cbc:Name'),
-			'customer_vat' => $this->queryString($xpath, '/inv:Invoice/cac:AccountingCustomerParty/cac:Party/cac:PartyTaxScheme/cbc:CompanyID'),
-			'amount_ht' => $this->queryFloat($xpath, '/inv:Invoice/cac:LegalMonetaryTotal/cbc:TaxExclusiveAmount'),
+			'document_type' => $documentType,
+			'invoice_number' => $this->queryString($xpath, '/'.$rootPrefix.'/cbc:ID'),
+			'issue_date' => $this->queryString($xpath, '/'.$rootPrefix.'/cbc:IssueDate'),
+			// DueDate n'existe pas sur une note de crédit (pas d'échéance de paiement à
+			// proprement parler), reste toujours null dans ce cas.
+			'due_date' => $this->queryString($xpath, '/'.$rootPrefix.'/cbc:DueDate'),
+			'supplier_vat' => $this->queryString($xpath, '/'.$rootPrefix.'/cac:AccountingSupplierParty/cac:Party/cac:PartyTaxScheme/cbc:CompanyID'),
+			'supplier_name' => $this->queryString($xpath, '/'.$rootPrefix.'/cac:AccountingSupplierParty/cac:Party/cac:PartyName/cbc:Name'),
+			'customer_vat' => $this->queryString($xpath, '/'.$rootPrefix.'/cac:AccountingCustomerParty/cac:Party/cac:PartyTaxScheme/cbc:CompanyID'),
+			'amount_ht' => $this->queryFloat($xpath, '/'.$rootPrefix.'/cac:LegalMonetaryTotal/cbc:TaxExclusiveAmount'),
 			// PayableAmount, jamais TaxInclusiveAmount qui peut différer en cas d'acompte
 			// déjà versé (voir SPEC.md section 6).
-			'amount_ttc' => $this->queryFloat($xpath, '/inv:Invoice/cac:LegalMonetaryTotal/cbc:PayableAmount'),
-			'currency' => $this->queryString($xpath, '/inv:Invoice/cbc:DocumentCurrencyCode'),
+			'amount_ttc' => $this->queryFloat($xpath, '/'.$rootPrefix.'/cac:LegalMonetaryTotal/cbc:PayableAmount'),
+			'currency' => $this->queryString($xpath, '/'.$rootPrefix.'/cbc:DocumentCurrencyCode'),
 			'payment_ref_raw' => $paymentRefRaw,
 			'payment_ref_normalized' => $paymentRefRaw !== null ? $this->normalizePaymentRef($paymentRefRaw) : null,
-			'payee_iban' => $this->queryString($xpath, '/inv:Invoice/cac:PaymentMeans/cac:PayeeFinancialAccount/cbc:ID'),
+			'payee_iban' => $this->queryString($xpath, '/'.$rootPrefix.'/cac:PaymentMeans/cac:PayeeFinancialAccount/cbc:ID'),
 		);
 	}
 

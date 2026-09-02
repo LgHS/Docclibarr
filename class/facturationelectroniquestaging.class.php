@@ -47,6 +47,7 @@ class FacturationElectroniqueStaging extends CommonObject
 		'sender_domain' => array('type' => 'varchar(255)', 'label' => 'SenderDomain', 'enabled' => 1, 'visible' => -1, 'notnull' => 1, 'position' => 20),
 		'origin_verified' => array('type' => 'integer', 'label' => 'OriginVerified', 'enabled' => 1, 'visible' => 1, 'notnull' => 1, 'default' => '0', 'position' => 25),
 		'platform_name' => array('type' => 'varchar(64)', 'label' => 'PlatformName', 'enabled' => 1, 'visible' => -1, 'notnull' => 1, 'default' => 'doccle', 'position' => 30),
+		'document_type' => array('type' => 'varchar(16)', 'label' => 'DocumentType', 'enabled' => 1, 'visible' => 1, 'notnull' => 1, 'default' => 'invoice', 'position' => 32),
 		'eml_ecm_file_id' => array('type' => 'integer', 'label' => 'EmlEcmFileId', 'enabled' => 1, 'visible' => -2, 'position' => 35),
 		'pdf_ecm_file_id' => array('type' => 'integer', 'label' => 'PdfEcmFileId', 'enabled' => 1, 'visible' => -2, 'position' => 40),
 		'xml_ecm_file_id' => array('type' => 'integer', 'label' => 'XmlEcmFileId', 'enabled' => 1, 'visible' => -2, 'position' => 45),
@@ -80,6 +81,7 @@ class FacturationElectroniqueStaging extends CommonObject
 	public $sender_domain;
 	public $origin_verified;
 	public $platform_name;
+	public $document_type;
 	public $eml_ecm_file_id;
 	public $pdf_ecm_file_id;
 	public $xml_ecm_file_id;

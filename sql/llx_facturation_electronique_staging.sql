@@ -12,6 +12,7 @@ CREATE TABLE llx_facturation_electronique_staging (
 	sender_domain           VARCHAR(255) NOT NULL,
 	origin_verified         TINYINT DEFAULT 0 NOT NULL,
 	platform_name           VARCHAR(64) DEFAULT 'doccle' NOT NULL,
+	document_type           VARCHAR(16) DEFAULT 'invoice' NOT NULL,
 	eml_ecm_file_id         INTEGER,
 	pdf_ecm_file_id         INTEGER,
 	xml_ecm_file_id         INTEGER,

@@ -18,7 +18,7 @@ composer.lock
 # Zip généré par scripts/build-zip.sh
 build/
 
-# Secrets / identifiants (tokens OAuth Gmail, etc. — ne doivent jamais être commités)
+# Secrets / identifiants (tokens OAuth Gmail, etc., ne doivent jamais être commités)
 .env
 *.env
 credentials.json
@@ -26,9 +26,9 @@ token.json
 *.pem
 *.key
 
-# Fixtures de test contenant des données réelles non anonymisées
+# .eml réels : jamais publiés, aucune exception (voir tests/fixtures/README.md et
+# tests/fixtures/real/, purement locaux)
 *.eml
-!tests/fixtures/**/*.eml
 
 # OS
 .DS_Store

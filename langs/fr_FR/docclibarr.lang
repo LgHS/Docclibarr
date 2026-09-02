@@ -6,6 +6,9 @@ Module109501Desc = Ingestion des factures électroniques Doccle (Peppol/UBL) re�
 
 DocclibarrArea = Factures électroniques Doccle
 DocclibarrList = Factures électroniques reçues
+DocclibarrDocumentType = Type
+DocclibarrDocumentTypeInvoice = Facture
+DocclibarrDocumentTypeCreditNote = Note de crédit
 DocclibarrSupplier = Fournisseur
 DocclibarrInvoiceNumber = N° facture
 DocclibarrAmountTTC = Montant TTC
