@@ -12,7 +12,7 @@ Docclibarr est un module à part entière, distinct du module d'**import bancair
 
 ## Statut
 
-🚧 **En développement, aucun code écrit à ce stade.** Ce dépôt contient pour l'instant la spécification technique complète (`SPEC.md`, non commité) et ce README. Voir la roadmap ci-dessous pour le détail des phases.
+🚧 **En développement.** Le squelette du module (Phase 1 et 2) est écrit et testé (29 tests PHPUnit sur la logique pure, activation confirmée sur une instance de dev), l'ingestion réelle contre de vraies factures est en cours de validation. Voir la roadmap ci-dessous pour le détail des phases.
 
 ## Fonctionnement prévu
 
@@ -28,6 +28,46 @@ Docclibarr est un module à part entière, distinct du module d'**import bancair
 - PHP 7.2 ou supérieur.
 - Un compte Gmail/Google Workspace dédié avec l'API Gmail activée (OAuth2 utilisateur classique, scope lecture seule). Un support IMAP pourrait être envisagé plus tard, en alternative ou en complément, pour couvrir une boîte mail hébergée ailleurs que sur Google Workspace.
 - Composer, pour la librairie cliente Gmail officielle (`google/apiclient`). Contrairement à DoliFius qui n'a aucune dépendance externe, ce module en introduit une, rendue nécessaire par l'API Gmail.
+
+## Installation
+
+1. Générez le zip déployable avec `bash scripts/build-zip.sh` (dépendances de production incluses, fichiers de dev exclus), ou téléchargez un zip déjà généré.
+2. **Configuration → Modules/Applications → Déployer un module externe**, ou copiez le dossier manuellement dans `custom/` de votre instance Dolibarr.
+   > ⚠️ Le dossier doit impérativement s'appeler `docclibarr` (le nom technique utilisé partout dans le code : `rights_class`, `langfiles`, menu, URL de config). Un zip dont le dossier racine porte un autre nom casse les liens de menu et de configuration (même gotcha déjà rencontré sur DoliFius).
+3. Activez le module depuis la liste des modules.
+4. **Donnez les permissions** : l'activation d'un module ne donne aucun droit automatiquement, même à un administrateur. Profil utilisateur → onglet Permissions → section Docclibarr, cochez "Consulter" et "Valider", puis déconnectez-vous/reconnectez-vous.
+
+## Configuration de la boîte mail dédiée et de l'API Gmail
+
+Docclibarr a besoin de trois choses : l'adresse de la boîte mail dédiée, des identifiants OAuth Gmail, et un refresh token généré une fois. Rien de tout ça ne se code en dur, tout se configure depuis la page de configuration du module (icône clé à molette dans la liste des modules, ou `admin/setup.php`).
+
+**1. Créer la boîte dédiée**
+
+Dans l'admin Google Workspace, créez un utilisateur avec une adresse longue et non devinable (jamais un mot du dictionnaire, jamais un préfixe type `compta-IDLONG@`, voir la section Sécurité plus bas). Cette boîte ne sert qu'à l'API, jamais à une connexion interactive au quotidien.
+
+**2. Créer un projet Google Cloud et activer l'API Gmail**
+
+Sur [console.cloud.google.com](https://console.cloud.google.com) : créez un projet, puis *API et services → Bibliothèque*, cherchez "Gmail API", activez-la.
+
+**3. Configurer l'écran de consentement OAuth**
+
+*API et services → Écran de consentement OAuth*. Type **Interne** (visible uniquement aux comptes de votre Workspace, aucune vérification Google à faire). Renseignez juste un nom d'app et un email de contact.
+
+**4. Créer des identifiants OAuth**
+
+*API et services → Identifiants → Créer des identifiants → ID client OAuth*. Type **Application Web**, avec comme URI de redirection autorisée exactement : `https://developers.google.com/oauthplayground`. Notez le Client ID et le Client Secret générés.
+
+**5. Générer le refresh token**
+
+Sur [developers.google.com/oauthplayground](https://developers.google.com/oauthplayground/) : icône ⚙️ → cochez "Use your own OAuth credentials" → collez le Client ID/Secret de l'étape 4. Dans la colonne de gauche, tout en bas, champ "Input your own scopes" : collez `https://www.googleapis.com/auth/gmail.readonly`, cliquez "Authorize APIs". **Connectez-vous avec le compte de la boîte dédiée** (étape 1), pas votre compte perso : c'est ce compte, et uniquement lui, qui détermine à quelle boîte le jeton final donnera accès. Une fois autorisé, cliquez "Exchange authorization code for tokens", le **Refresh token** apparaît dans le panneau de droite.
+
+**6. Tout renseigner dans Docclibarr**
+
+Adresse de la boîte (étape 1), Client ID et Client Secret (étape 4), Refresh token (étape 5), dans la page de configuration du module. Le bouton **"Tester la connexion"** confirme que tout fonctionne (adresse + nombre de messages dans la boîte) sans avoir à attendre un cycle complet du cron d'ingestion.
+
+**7. Activer la tâche cron**
+
+*Configuration → Outils admin → Tâches planifiées*, cherchez `DocclibarrIngestionWorker` (désactivée par défaut à l'activation du module, pour éviter qu'elle tourne dans le vide avant que la config Gmail existe). Cochez-la, réglez la fréquence si besoin (15 minutes par défaut), et configurez le déclencheur d'exécution périodique côté serveur (crontab système appelant `scripts/cron/cron_run_jobs.php`, ou webcron externe si vous n'avez pas la main sur le crontab). Le bouton "Exécuter maintenant" de cette même page permet un premier test manuel immédiat, sans attendre le prochain cycle.
 
 ## Roadmap
 
