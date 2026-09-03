@@ -93,33 +93,8 @@ $alreadyProcessed = in_array($staging->match_status, array(
 	FacturationElectroniqueStaging::STATUS_REJECTED,
 ), true);
 
-/**
- * Re-rattache les documents ECM de l'enregistrement de staging à l'objet Dolibarr
- * validé (voir SPEC.md section 7 et 10 : le rattachement définitif ne se fait qu'après
- * validation humaine, jamais avant).
- *
- * @param DoliDB $db
- * @param FacturationElectroniqueStaging $staging
- * @param string $objectType Ex: 'invoice_supplier'
- * @param int    $objectId
- */
-function docclibarr_relink_ecm_files($db, $staging, $objectType, $objectId)
-{
-	foreach (array($staging->pdf_ecm_file_id, $staging->xml_ecm_file_id) as $ecmFileId) {
-		if (empty($ecmFileId)) {
-			continue;
-		}
-
-		$ecmfile = new EcmFiles($db);
-		if ($ecmfile->fetch($ecmFileId) <= 0) {
-			continue;
-		}
-
-		$ecmfile->src_object_type = $objectType;
-		$ecmfile->src_object_id = $objectId;
-		$ecmfile->update($user);
-	}
-}
+// Le re-rattachement ECM vit maintenant sur FacturationElectroniqueStaging::relinkEcmFiles(),
+// partagé avec les actions rapides de list.php plutôt que dupliqué ici.
 
 if ($action === 'validate_proposal' && !$alreadyProcessed) {
 	if (!$user->rights->docclibarr->validate) {
@@ -130,7 +105,7 @@ if ($action === 'validate_proposal' && !$alreadyProcessed) {
 	} else {
 		$result = $staging->markValidated($user, $staging->matched_object_type, $staging->matched_object_id);
 		if ($result > 0) {
-			docclibarr_relink_ecm_files($db, $staging, $staging->matched_object_type, $staging->matched_object_id);
+			$staging->relinkEcmFiles($user, $staging->matched_object_type, $staging->matched_object_id);
 			setEventMessages($langs->trans("RecordSaved"), null);
 		} else {
 			setEventMessages(implode(' ; ', $staging->errors), null, 'errors');
@@ -147,7 +122,7 @@ if ($action === 'validate_proposal' && !$alreadyProcessed) {
 	} else {
 		$result = $staging->markValidated($user, 'invoice_supplier', $manualId);
 		if ($result > 0) {
-			docclibarr_relink_ecm_files($db, $staging, 'invoice_supplier', $manualId);
+			$staging->relinkEcmFiles($user, 'invoice_supplier', $manualId);
 			setEventMessages($langs->trans("RecordSaved"), null);
 		} else {
 			setEventMessages(implode(' ; ', $staging->errors), null, 'errors');
@@ -201,7 +176,7 @@ if ($action === 'validate_proposal' && !$alreadyProcessed) {
 
 				$result = $staging->markValidated($user, 'invoice_supplier', $newInvoiceId);
 				if ($result > 0) {
-					docclibarr_relink_ecm_files($db, $staging, 'invoice_supplier', $newInvoiceId);
+					$staging->relinkEcmFiles($user, 'invoice_supplier', $newInvoiceId);
 					setEventMessages($langs->trans("RecordSaved"), null);
 				} else {
 					setEventMessages(implode(' ; ', $staging->errors), null, 'errors');

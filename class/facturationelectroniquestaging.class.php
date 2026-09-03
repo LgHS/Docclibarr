@@ -286,4 +286,34 @@ class FacturationElectroniqueStaging extends CommonObject
 
 		return $this->update($user);
 	}
+
+	/**
+	 * Re-rattache les documents ECM (PDF/XML) de cet enregistrement à l'objet Dolibarr
+	 * validé (voir SPEC.md section 7 et 10 : le rattachement définitif ne se fait
+	 * qu'après validation humaine, jamais avant). Méthode partagée entre card.php et
+	 * list.php (actions rapides), plutôt que dupliquée dans chacun.
+	 *
+	 * @param User   $user
+	 * @param string $objectType Ex: 'invoice_supplier'
+	 * @param int    $objectId
+	 */
+	public function relinkEcmFiles(User $user, $objectType, $objectId)
+	{
+		require_once DOL_DOCUMENT_ROOT.'/ecm/class/ecmfiles.class.php';
+
+		foreach (array($this->pdf_ecm_file_id, $this->xml_ecm_file_id) as $ecmFileId) {
+			if (empty($ecmFileId)) {
+				continue;
+			}
+
+			$ecmfile = new EcmFiles($this->db);
+			if ($ecmfile->fetch($ecmFileId) <= 0) {
+				continue;
+			}
+
+			$ecmfile->src_object_type = $objectType;
+			$ecmfile->src_object_id = $objectId;
+			$ecmfile->update($user);
+		}
+	}
 }

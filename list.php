@@ -44,6 +44,43 @@ if (!$user->rights->docclibarr->read) {
 	accessforbidden();
 }
 
+// Actions rapides directement depuis la liste (valider une proposition automatique,
+// rejeter avec motif), sans passer par la fiche détail. Traitées avant fetchAll() plus
+// bas pour que la liste reflète l'état à jour dès ce chargement.
+$listAction = GETPOST('action', 'aZ09');
+
+if ($listAction === 'quick_validate') {
+	if (!$user->rights->docclibarr->validate) {
+		accessforbidden();
+	}
+	$quickId = (int) GETPOST('id', 'int');
+	$quickStaging = new FacturationElectroniqueStaging($db);
+	if ($quickId > 0 && $quickStaging->fetch($quickId) > 0 && !empty($quickStaging->matched_object_id) && !empty($quickStaging->matched_object_type)) {
+		$quickResult = $quickStaging->markValidated($user, $quickStaging->matched_object_type, $quickStaging->matched_object_id);
+		if ($quickResult > 0) {
+			$quickStaging->relinkEcmFiles($user, $quickStaging->matched_object_type, $quickStaging->matched_object_id);
+			setEventMessages($langs->trans("RecordSaved"), null);
+		} else {
+			setEventMessages(implode(' ; ', $quickStaging->errors), null, 'errors');
+		}
+	}
+} elseif ($listAction === 'quick_reject') {
+	if (!$user->rights->docclibarr->validate) {
+		accessforbidden();
+	}
+	$quickId = (int) GETPOST('id', 'int');
+	$quickReason = GETPOST('reason', 'restricthtml');
+	$quickStaging = new FacturationElectroniqueStaging($db);
+	if ($quickId > 0 && $quickStaging->fetch($quickId) > 0) {
+		$quickResult = $quickStaging->markRejected($user, $quickReason);
+		if ($quickResult > 0) {
+			setEventMessages($langs->trans("RecordSaved"), null);
+		} else {
+			setEventMessages(implode(' ; ', $quickStaging->errors), null, 'errors');
+		}
+	}
+}
+
 $statusFilter = GETPOST('match_status', 'alpha');
 
 $staging = new FacturationElectroniqueStaging($db);
@@ -143,7 +180,39 @@ if (is_array($records) && count($records) > 0) {
 		print '<td>'.($record->origin_verified ? img_picto('', 'tick').' '.$langs->trans("DocclibarrOriginVerified") : img_warning().' '.$langs->trans("DocclibarrOriginQuarantine")).'</td>';
 		print '<td>'.$statusLabel.'</td>';
 		print '<td>'.$confidenceLabel.'</td>';
-		print '<td><a href="'.dol_buildpath('/docclibarr/card.php', 1).'?id='.((int) $record->rowid).'">'.img_picto($langs->trans("Show"), 'view').'</a></td>';
+		$rowProcessed = in_array($record->match_status, array(
+			FacturationElectroniqueStaging::STATUS_VALIDATED,
+			FacturationElectroniqueStaging::STATUS_REJECTED,
+		), true);
+
+		print '<td>';
+		print '<a href="'.dol_buildpath('/docclibarr/card.php', 1).'?id='.((int) $record->rowid).'">'.img_picto($langs->trans("Show"), 'view').'</a>';
+
+		if (!$rowProcessed && $user->rights->docclibarr->validate) {
+			// Valider : seulement si une proposition automatique existe déjà (niveau 1/2
+			// du matching), sinon rien à valider directement depuis la liste, il faut
+			// passer par la fiche pour rattacher manuellement ou créer un brouillon.
+			if ($record->match_status === FacturationElectroniqueStaging::STATUS_AUTO_MATCHED && !empty($record->matched_object_id)) {
+				print ' <form method="POST" action="'.$_SERVER["PHP_SELF"].'" style="display:inline">';
+				print '<input type="hidden" name="token" value="'.newToken().'">';
+				print '<input type="hidden" name="action" value="quick_validate">';
+				print '<input type="hidden" name="id" value="'.((int) $record->rowid).'">';
+				print '<input type="submit" class="button smallpaddingimp" value="'.$langs->trans("DocclibarrValidate").'">';
+				print '</form>';
+			}
+
+			// Rejeter : motif dans un petit champ texte plutôt qu'une invite JS, plus
+			// transparent et sans dépendance JS.
+			print ' <form method="POST" action="'.$_SERVER["PHP_SELF"].'" style="display:inline">';
+			print '<input type="hidden" name="token" value="'.newToken().'">';
+			print '<input type="hidden" name="action" value="quick_reject">';
+			print '<input type="hidden" name="id" value="'.((int) $record->rowid).'">';
+			print '<input type="text" name="reason" size="12" placeholder="'.$langs->trans("DocclibarrRejectionReason").'">';
+			print '<input type="submit" class="button button-cancel smallpaddingimp" value="'.$langs->trans("DocclibarrReject").'">';
+			print '</form>';
+		}
+
+		print '</td>';
 		print '</tr>';
 	}
 } else {
