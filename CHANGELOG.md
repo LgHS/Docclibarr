@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.4.4 (2026-09-07)
+
+- Vrai correctif du lien vide signalé en 0.4.3 (le repli sur `ref_supplier`/l'id n'y changeait rien) : la cause réelle était que `$langs->trans()` substitue lui-même les `%s` de la chaîne de langue avec ses propres paramètres (vides par défaut), donc l'appel `sprintf()` ensuite ne trouvait plus jamais de `%s` à remplacer et affichait un trou. Corrigé partout dans le module (card.php, admin/setup.php) en passant les valeurs directement à `trans()` plutôt que via `sprintf()` sur son résultat. Ça corrige au passage le même trou potentiel sur le message "déjà traité", sur "facture introuvable", et sur les messages de test de connexion Gmail.
+
+## 0.4.3 (2026-09-07)
+
+- Texte d'explication ajouté sous chaque titre d'action sur la fiche détail (valider la proposition / rattacher manuellement / créer un brouillon), pour clarifier à quoi sert chacune et quand l'utiliser.
+- Bug trouvé en conditions réelles : le lien vers une facture Dolibarr déjà existante (dédoublonnage du brouillon, colonne liste, ligne "facture liée") pouvait s'afficher vide quand `FactureFournisseur::ref` ressort vide après `fetch()`. Repli sur `ref_supplier`, puis sur l'id, pour ne plus jamais afficher un lien sans texte.
+
+## 0.4.2 (2026-09-07)
+
+- Dédoublonnage sur "Créer un brouillon de facture fournisseur" : si une facture avec la même référence (et le même tiers, si la TVA est connue) existe déjà dans Dolibarr, le bouton n'est plus proposé, un lien vers la facture existante s'affiche à la place (fiche détail), revérifié aussi côté serveur.
+- La liste affiche désormais ce même lien avant même la validation de l'entrée, pas seulement une fois validée : un doublon potentiel est visible directement depuis la liste, sans ouvrir la fiche.
+
+## 0.4.1 (2026-09-07)
+
+- Une fois une entrée validée (proposition validée, rattachement manuel, ou brouillon créé), la fiche détail et la liste affichent maintenant la facture fournisseur Dolibarr réellement créée/rattachée (référence, statut, montant, lien direct), au lieu du message générique "déjà traité" sans aucune trace de ce qui a été fait.
+
+## 0.4.0 (2026-09-07)
+
+- Nouveau bouton sur la fiche détail (card.php) pour créer directement le tiers fournisseur Dolibarr à partir des infos extraites du XML (nom, TVA, adresse), sans repasser par le module Tiers. Affiché uniquement si aucun tiers ne correspond déjà à la TVA extraite (dédoublonnage), revérifié côté serveur avant création.
+- Extraction de l'adresse postale du fournisseur depuis le XML (rue, code postal, ville, code pays), en plus du nom et de la TVA déjà extraits. Affichée sur la fiche détail et utilisée pour pré-remplir le nouveau tiers (pays déduit du XML, ou à défaut du préfixe de la TVA).
+- Migration de base ajoutée (`sql/llx_facturation_electronique_staging_add_supplier_address.sql`) pour les instances où le module est déjà activé : nécessite de désactiver puis réactiver le module pour que les nouvelles colonnes soient créées.
+
 ## Jusqu'à 0.3.9 (2026-09-02 / 2026-09-03)
 
 Première session de développement et de mise au point contre une vraie instance Dolibarr (`compta-preprod.lghs.be`). Regroupé par thème plutôt que version par version, vu le nombre d'itérations de correctifs.

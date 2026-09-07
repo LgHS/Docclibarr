@@ -119,6 +119,13 @@ class UblInvoiceParser
 			$amountTtc = $payableAmount;
 		}
 
+		// Adresse postale du fournisseur (cac:PostalAddress), ajoutée le 2026-09-07 : sert à
+		// pré-remplir la création du tiers Dolibarr depuis la fiche de staging (voir
+		// card.php), en plus du nom et de la TVA déjà extraits. Bloc entièrement optionnel du
+		// standard (deux factures réelles analysées en étaient dépourvues), chaque champ
+		// individuel peut donc rester null.
+		$supplierAddressPrefix = '/'.$rootPrefix.'/cac:AccountingSupplierParty/cac:Party/cac:PostalAddress';
+
 		return array(
 			'document_type' => $documentType,
 			'invoice_number' => $this->queryString($xpath, '/'.$rootPrefix.'/cbc:ID'),
@@ -128,6 +135,10 @@ class UblInvoiceParser
 			'due_date' => $this->queryString($xpath, '/'.$rootPrefix.'/cbc:DueDate'),
 			'supplier_vat' => $this->queryString($xpath, '/'.$rootPrefix.'/cac:AccountingSupplierParty/cac:Party/cac:PartyTaxScheme/cbc:CompanyID'),
 			'supplier_name' => $this->queryString($xpath, '/'.$rootPrefix.'/cac:AccountingSupplierParty/cac:Party/cac:PartyName/cbc:Name'),
+			'supplier_address' => $this->queryString($xpath, $supplierAddressPrefix.'/cbc:StreetName'),
+			'supplier_zip' => $this->queryString($xpath, $supplierAddressPrefix.'/cbc:PostalZone'),
+			'supplier_town' => $this->queryString($xpath, $supplierAddressPrefix.'/cbc:CityName'),
+			'supplier_country_code' => $this->queryString($xpath, $supplierAddressPrefix.'/cac:Country/cbc:IdentificationCode'),
 			'customer_vat' => $this->queryString($xpath, '/'.$rootPrefix.'/cac:AccountingCustomerParty/cac:Party/cac:PartyTaxScheme/cbc:CompanyID'),
 			'amount_ht' => $this->queryFloat($xpath, '/'.$rootPrefix.'/cac:LegalMonetaryTotal/cbc:TaxExclusiveAmount'),
 			'amount_ttc' => $amountTtc,

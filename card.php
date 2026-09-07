@@ -16,16 +16,18 @@
  */
 /**
  * Fiche détail d'un enregistrement de staging (voir SPEC.md section 11) : affiche la
- * proposition de rattachement du moteur de matching et expose les quatre actions
- * possibles, toutes soumises à une confirmation humaine explicite (voir SPEC.md
- * section 8 et 12, rien n'est jamais appliqué automatiquement, y compris niveau 1) :
- * valider la proposition telle quelle, rattacher manuellement un autre objet, créer un
- * brouillon de facture fournisseur, ou rejeter avec motif.
+ * proposition de rattachement du moteur de matching et expose les actions possibles,
+ * toutes soumises à une confirmation humaine explicite (voir SPEC.md section 8 et 12,
+ * rien n'est jamais appliqué automatiquement, y compris niveau 1) : valider la
+ * proposition telle quelle, rattacher manuellement un autre objet, créer le tiers
+ * fournisseur à partir du XML, créer un brouillon de facture fournisseur, ou rejeter
+ * avec motif.
  *
- * AVERTISSEMENT : la création de facture fournisseur (FactureFournisseur::create()) et
- * le re-rattachement des documents ECM à l'objet validé n'ont pas pu être vérifiés
- * contre une instance Dolibarr réelle, voir SPEC.md section 14 (couche 3). À tester
- * prioritairement avec des tiers et montants factices avant tout usage réel.
+ * AVERTISSEMENT : la création de facture fournisseur (FactureFournisseur::create()), la
+ * création de tiers (Societe::create()) et le re-rattachement des documents ECM à
+ * l'objet validé n'ont pas pu être vérifiés contre une instance Dolibarr réelle, voir
+ * SPEC.md section 14 (couche 3). À tester prioritairement avec des tiers et montants
+ * factices avant tout usage réel.
  */
 
 $res = 0;
@@ -133,10 +135,16 @@ if ($action === 'validate_proposal' && !$alreadyProcessed) {
 		accessforbidden();
 	}
 
+	$duplicateInvoiceId = $staging->findExistingSupplierInvoiceId();
+
 	if ($staging->document_type === 'credit_note') {
 		// Défense en profondeur : le bouton est déjà masqué pour une note de crédit, mais
 		// on refuse aussi l'action côté serveur si elle est soumise quand même.
 		setEventMessages("Impossible de créer un brouillon de facture depuis une note de crédit", null, 'errors');
+	} elseif ($duplicateInvoiceId !== null) {
+		// Idem : le bouton est déjà masqué si une facture avec cette référence existe déjà
+		// (voir plus bas, section d'affichage), mais revérifié ici côté serveur.
+		setEventMessages($langs->trans("DocclibarrDraftAlreadyExistsError"), null, 'errors');
 	} else {
 		$thirdPartyId = (int) GETPOST('third_party_id', 'int');
 		$thirdParty = new Societe($db);
@@ -184,6 +192,60 @@ if ($action === 'validate_proposal' && !$alreadyProcessed) {
 			}
 		}
 	}
+} elseif ($action === 'create_third_party' && !$alreadyProcessed) {
+	if (!$user->rights->docclibarr->validate) {
+		accessforbidden();
+	}
+
+	// Dédoublonnage : uniquement possible si une TVA a été extraite du XML (clé fiable,
+	// voir la présélection plus bas qui utilise le même critère). Revérifié ici côté
+	// serveur, pas seulement en masquant le bouton, au cas où un autre onglet aurait
+	// entretemps créé le tiers.
+	if (empty($staging->supplier_vat) || empty($staging->supplier_name)) {
+		setEventMessages("TVA ou nom fournisseur manquant dans le XML, impossible de créer le tiers automatiquement", null, 'errors');
+	} else {
+		$sqlDuplicateCheck = "SELECT rowid FROM ".MAIN_DB_PREFIX."societe WHERE tva_intra = '".$db->escape($staging->supplier_vat)."'";
+		$resqlDuplicateCheck = $db->query($sqlDuplicateCheck);
+		if ($resqlDuplicateCheck && $db->num_rows($resqlDuplicateCheck) > 0) {
+			setEventMessages("Un tiers avec cette TVA existe déjà, sélectionnez-le plutôt que d'en créer un nouveau", null, 'errors');
+		} else {
+			global $mysoc;
+
+			$newThirdParty = new Societe($db);
+			$newThirdParty->name = $staging->supplier_name;
+			$newThirdParty->tva_intra = $staging->supplier_vat;
+			$newThirdParty->address = $staging->supplier_address !== null ? $staging->supplier_address : '';
+			$newThirdParty->zip = $staging->supplier_zip !== null ? $staging->supplier_zip : '';
+			$newThirdParty->town = $staging->supplier_town !== null ? $staging->supplier_town : '';
+			$newThirdParty->fournisseur = 1;
+			$newThirdParty->client = 0;
+			$newThirdParty->code_client = -1;
+			$newThirdParty->code_fournisseur = -1;
+
+			// Pays : d'abord cac:Country/cbc:IdentificationCode du XML (supplier_country_code)
+			// s'il a pu être extrait, sinon déduit du préfixe ISO à 2 lettres de la TVA
+			// (convention intracommunautaire standard, ex: "BE0123456789"), avec repli final
+			// sur le pays de notre propre société si aucun des deux n'est exploitable ou
+			// reconnu dans la table c_country.
+			$vatCountryCode = null;
+			if (preg_match('/^([A-Za-z]{2})/', $staging->supplier_vat, $vatCountryMatches)) {
+				$vatCountryCode = strtoupper($vatCountryMatches[1]);
+			}
+			$countryCode = $staging->supplier_country_code !== null ? strtoupper($staging->supplier_country_code) : $vatCountryCode;
+			$newThirdParty->country_id = $countryCode !== null ? dol_getIdFromCode($db, $countryCode, 'c_country', 'code', 'rowid') : 0;
+			if (empty($newThirdParty->country_id)) {
+				$newThirdParty->country_id = $mysoc->country_id;
+			}
+
+			$newThirdPartyId = $newThirdParty->create($user);
+
+			if ($newThirdPartyId <= 0) {
+				setEventMessages(implode(' ; ', $newThirdParty->errors), null, 'errors');
+			} else {
+				setEventMessages($langs->trans("RecordSaved"), null);
+			}
+		}
+	}
 } elseif ($action === 'reject' && !$alreadyProcessed) {
 	if (!$user->rights->docclibarr->validate) {
 		accessforbidden();
@@ -214,7 +276,11 @@ print '<a href="'.dol_buildpath('/docclibarr/list.php', 1).'">'.$langs->trans("D
 print load_fiche_titre($staging->supplier_name.' - '.$staging->invoice_number, '', 'docclibarr@docclibarr');
 
 if ($alreadyProcessed) {
-	print '<div class="info">'.sprintf($langs->trans("DocclibarrAlreadyProcessed"), $langs->trans('DocclibarrMatchStatus'.ucfirst($staging->match_status === 'validated' ? 'Validated' : 'Rejected'))).'</div>';
+	// Paramètre passé directement à trans(), jamais via sprintf() sur son résultat : Dolibarr
+	// substitue lui-même les %s de la chaîne de langue avec ses propres paramètres (vides par
+	// défaut si on ne les passe pas ici), donc un sprintf() après coup ne voit plus jamais de
+	// %s à remplacer et affiche un trou. Bug réel rencontré le 2026-09-07 sur cette instance.
+	print '<div class="info">'.$langs->trans("DocclibarrAlreadyProcessed", $langs->trans('DocclibarrMatchStatus'.ucfirst($staging->match_status === 'validated' ? 'Validated' : 'Rejected'))).'</div>';
 }
 
 $documentTypeLangKeys = array(
@@ -226,6 +292,8 @@ $isCreditNote = ($staging->document_type === 'credit_note');
 print '<table class="border centpercent">';
 print '<tr><td class="titlefield">'.$langs->trans("DocclibarrDocumentType").'</td><td>'.(isset($documentTypeLangKeys[$staging->document_type]) ? $langs->trans($documentTypeLangKeys[$staging->document_type]) : dol_escape_htmltag($staging->document_type)).'</td></tr>';
 print '<tr><td>'.$langs->trans("DocclibarrSupplier").'</td><td>'.dol_escape_htmltag($staging->supplier_name).' ('.dol_escape_htmltag($staging->supplier_vat).')</td></tr>';
+$supplierAddressParts = array_filter(array($staging->supplier_address, $staging->supplier_zip, $staging->supplier_town, $staging->supplier_country_code));
+print '<tr><td>Adresse</td><td>'.dol_escape_htmltag(implode(' ', $supplierAddressParts)).'</td></tr>';
 print '<tr><td>'.$langs->trans("DocclibarrInvoiceNumber").'</td><td>'.dol_escape_htmltag($staging->invoice_number).'</td></tr>';
 print '<tr><td>'.$langs->trans("DocclibarrAmountTTC").'</td><td>'.($staging->amount_ttc !== null ? price($staging->amount_ttc) : '').' '.dol_escape_htmltag($staging->currency).'</td></tr>';
 print '<tr><td>Communication</td><td>'.dol_escape_htmltag($staging->payment_ref_raw).'</td></tr>';
@@ -240,6 +308,28 @@ $cardConfidenceLabel = isset($cardMatchConfidenceLangKeys[$staging->match_confid
 	? $langs->trans($cardMatchConfidenceLangKeys[$staging->match_confidence])
 	: $langs->trans("DocclibarrMatchConfidenceNone");
 print '<tr><td>'.$langs->trans("DocclibarrMatchConfidence").'</td><td>'.$cardConfidenceLabel.'</td></tr>';
+
+// Facture Dolibarr liée (créée ou rattachée après validation) : sans ça, une fois l'entrée
+// validée, plus aucun moyen depuis cette fiche de retrouver quelle facture réelle a été
+// créée ou rattachée, seul le message générique "déjà traité" était affiché jusqu'ici.
+if ($staging->matched_object_type === 'invoice_supplier' && !empty($staging->matched_object_id)) {
+	$linkedInvoice = new FactureFournisseur($db);
+	print '<tr><td>'.$langs->trans("DocclibarrLinkedInvoice").'</td><td>';
+	if ($linkedInvoice->fetch($staging->matched_object_id) > 0) {
+		$linkedInvoiceStatusLabel = method_exists($linkedInvoice, 'getLibStatut') ? $linkedInvoice->getLibStatut(1) : '';
+		// Repli si ->ref ressort vide après fetch() (rencontré en conditions réelles sur
+		// cette instance, cause exacte non identifiée) : jamais un lien sans texte.
+		$linkedInvoiceRefDisplay = !empty($linkedInvoice->ref) ? $linkedInvoice->ref : (!empty($linkedInvoice->ref_supplier) ? $linkedInvoice->ref_supplier : '#'.$linkedInvoice->id);
+		print '<a href="'.dol_buildpath('/fourn/facture/card.php', 1).'?id='.((int) $linkedInvoice->id).'">'.dol_escape_htmltag($linkedInvoiceRefDisplay).'</a>';
+		if ($linkedInvoiceStatusLabel !== '') {
+			print ' - '.$linkedInvoiceStatusLabel;
+		}
+		print ' ('.price($linkedInvoice->total_ttc).')';
+	} else {
+		print $langs->trans("DocclibarrLinkedInvoiceNotFound", (string) ((int) $staging->matched_object_id));
+	}
+	print '</td></tr>';
+}
 print '</table>';
 
 // Prévisualisation (voir SPEC.md section 11)
@@ -259,6 +349,7 @@ if (!$alreadyProcessed && $user->rights->docclibarr->validate) {
 
 	// Action 1 : valider la proposition telle quelle
 	print '<div class="marginTopOnly"><h3>'.$langs->trans("DocclibarrProposedMatch").'</h3>';
+	print '<p class="opacitymedium">'.$langs->trans("DocclibarrProposedMatchHelp").'</p>';
 	if (!empty($staging->matched_object_id)) {
 		$proposed = new FactureFournisseur($db);
 		if ($proposed->fetch($staging->matched_object_id) > 0) {
@@ -279,6 +370,7 @@ if (!$alreadyProcessed && $user->rights->docclibarr->validate) {
 	// du même tiers (même TVA fournisseur que l'extraction XML) si elles existent, sinon
 	// les plus récentes toutes tiers confondus, pour ne jamais laisser le champ vide.
 	print '<div class="marginTopOnly"><h3>'.$langs->trans("DocclibarrManualAttach").'</h3>';
+	print '<p class="opacitymedium">'.$langs->trans("DocclibarrManualAttachHelp").'</p>';
 
 	$candidateInvoices = array();
 	if (!empty($staging->supplier_vat)) {
@@ -335,29 +427,66 @@ if (!$alreadyProcessed && $user->rights->docclibarr->validate) {
 	// section 6 : seul le rattachement manuel à la facture originale s'applique dans ce cas).
 	if (!$isCreditNote) {
 		print '<div class="marginTopOnly"><h3>'.$langs->trans("DocclibarrCreateDraft").'</h3>';
-		print '<form method="POST" action="'.$_SERVER["PHP_SELF"].'?id='.$id.'">';
-		print '<input type="hidden" name="token" value="'.newToken().'">';
-		print '<input type="hidden" name="action" value="create_draft">';
-		print $langs->trans("DocclibarrThirdPartyId").' ';
+		print '<p class="opacitymedium">'.$langs->trans("DocclibarrCreateDraftHelp").'</p>';
 
-		// Pré-sélection si un tiers existant correspond déjà à la TVA extraite du XML,
-		// simple confort, l'utilisateur reste libre de choisir un autre tiers dans la liste.
-		$preselectedThirdPartyId = 0;
-		if (!empty($staging->supplier_vat)) {
-			$sqlThirdParty = "SELECT rowid FROM ".MAIN_DB_PREFIX."societe WHERE tva_intra = '".$db->escape($staging->supplier_vat)."'";
-			$resqlThirdParty = $db->query($sqlThirdParty);
-			if ($resqlThirdParty && $db->num_rows($resqlThirdParty) > 0) {
-				$objThirdParty = $db->fetch_object($resqlThirdParty);
-				$preselectedThirdPartyId = (int) $objThirdParty->rowid;
+		// Dédoublonnage : si une facture fournisseur avec cette référence (et ce tiers, si
+		// la TVA est connue) existe déjà dans Dolibarr, ne pas proposer d'en créer une
+		// autre, juste un lien vers l'existante (cas réel : facture déjà saisie à la main
+		// avant que Docclibarr ne la reçoive, voir FacturationElectroniqueStaging::findExistingSupplierInvoiceId()).
+		$duplicateInvoiceForDisplay = $staging->findExistingSupplierInvoiceId();
+
+		if ($duplicateInvoiceForDisplay !== null) {
+			$duplicateInvoice = new FactureFournisseur($db);
+			if ($duplicateInvoice->fetch($duplicateInvoiceForDisplay) > 0) {
+				$duplicateInvoiceStatusLabel = method_exists($duplicateInvoice, 'getLibStatut') ? $duplicateInvoice->getLibStatut(1) : '';
+				// Repli si ->ref ressort vide après fetch() (rencontré en conditions réelles
+				// sur cette instance, cause exacte non identifiée) : jamais un lien sans texte.
+				$duplicateInvoiceRefDisplay = !empty($duplicateInvoice->ref) ? $duplicateInvoice->ref : (!empty($duplicateInvoice->ref_supplier) ? $duplicateInvoice->ref_supplier : '#'.$duplicateInvoice->id);
+				$duplicateInvoiceLink = '<a href="'.dol_buildpath('/fourn/facture/card.php', 1).'?id='.((int) $duplicateInvoice->id).'">'.dol_escape_htmltag($duplicateInvoiceRefDisplay).'</a>';
+				if ($duplicateInvoiceStatusLabel !== '') {
+					$duplicateInvoiceLink .= ' - '.$duplicateInvoiceStatusLabel;
+				}
+				print '<p>'.$langs->trans("DocclibarrDraftAlreadyExists", $duplicateInvoiceLink).'</p>';
+			}
+		} else {
+			print '<form method="POST" action="'.$_SERVER["PHP_SELF"].'?id='.$id.'">';
+			print '<input type="hidden" name="token" value="'.newToken().'">';
+			print '<input type="hidden" name="action" value="create_draft">';
+			print $langs->trans("DocclibarrThirdPartyId").' ';
+
+			// Pré-sélection si un tiers existant correspond déjà à la TVA extraite du XML,
+			// simple confort, l'utilisateur reste libre de choisir un autre tiers dans la liste.
+			$preselectedThirdPartyId = 0;
+			if (!empty($staging->supplier_vat)) {
+				$sqlThirdParty = "SELECT rowid FROM ".MAIN_DB_PREFIX."societe WHERE tva_intra = '".$db->escape($staging->supplier_vat)."'";
+				$resqlThirdParty = $db->query($sqlThirdParty);
+				if ($resqlThirdParty && $db->num_rows($resqlThirdParty) > 0) {
+					$objThirdParty = $db->fetch_object($resqlThirdParty);
+					$preselectedThirdPartyId = (int) $objThirdParty->rowid;
+				}
+			}
+
+			// Filtré aux tiers marqués fournisseurs (s.fournisseur=1), cohérent avec l'objet
+			// créé (une facture fournisseur).
+			print $form->select_company($preselectedThirdPartyId, 'third_party_id', 's.fournisseur=1', 1, 0, 0, array(), 0, 'minwidth300');
+
+			print ' <input type="submit" class="button" value="'.$langs->trans("DocclibarrCreate").'">';
+			print '</form>';
+
+			// Créer directement le tiers fournisseur à partir des infos extraites du XML (nom +
+			// TVA), pour éviter l'aller-retour manuel dans le module Tiers avant de pouvoir créer
+			// le brouillon. Uniquement proposé si aucun tiers ne correspond déjà à cette TVA
+			// (voir $preselectedThirdPartyId ci-dessus), pour ne jamais créer de doublon.
+			if ($preselectedThirdPartyId <= 0 && !empty($staging->supplier_vat) && !empty($staging->supplier_name)) {
+				print '<form method="POST" action="'.$_SERVER["PHP_SELF"].'?id='.$id.'" class="marginTopOnly">';
+				print '<input type="hidden" name="token" value="'.newToken().'">';
+				print '<input type="hidden" name="action" value="create_third_party">';
+				print '<input type="submit" class="button" value="'.$langs->trans("DocclibarrCreateThirdParty").'">';
+				print '</form>';
 			}
 		}
 
-		// Filtré aux tiers marqués fournisseurs (s.fournisseur=1), cohérent avec l'objet
-		// créé (une facture fournisseur).
-		print $form->select_company($preselectedThirdPartyId, 'third_party_id', 's.fournisseur=1', 1, 0, 0, array(), 0, 'minwidth300');
-
-		print ' <input type="submit" class="button" value="'.$langs->trans("DocclibarrCreate").'">';
-		print '</form></div>';
+		print '</div>';
 	}
 
 	// Action 4 : rejeter avec motif

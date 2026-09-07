@@ -53,6 +53,12 @@ class FacturationElectroniqueStaging extends CommonObject
 		'xml_ecm_file_id' => array('type' => 'integer', 'label' => 'XmlEcmFileId', 'enabled' => 1, 'visible' => -2, 'position' => 45),
 		'supplier_vat' => array('type' => 'varchar(32)', 'label' => 'SupplierVat', 'enabled' => 1, 'visible' => 1, 'index' => 1, 'searchall' => 1, 'position' => 50),
 		'supplier_name' => array('type' => 'varchar(255)', 'label' => 'SupplierName', 'enabled' => 1, 'visible' => 1, 'searchall' => 1, 'position' => 55),
+		// Adresse postale du fournisseur (cac:PostalAddress du XML), ajoutée le 2026-09-07
+		// pour pré-remplir la création du tiers Dolibarr depuis card.php.
+		'supplier_address' => array('type' => 'varchar(255)', 'label' => 'SupplierAddress', 'enabled' => 1, 'visible' => -1, 'position' => 56),
+		'supplier_zip' => array('type' => 'varchar(10)', 'label' => 'SupplierZip', 'enabled' => 1, 'visible' => -1, 'position' => 57),
+		'supplier_town' => array('type' => 'varchar(128)', 'label' => 'SupplierTown', 'enabled' => 1, 'visible' => -1, 'position' => 58),
+		'supplier_country_code' => array('type' => 'varchar(2)', 'label' => 'SupplierCountryCode', 'enabled' => 1, 'visible' => -1, 'position' => 59),
 		'customer_vat' => array('type' => 'varchar(32)', 'label' => 'CustomerVat', 'enabled' => 1, 'visible' => -1, 'position' => 60),
 		'invoice_number' => array('type' => 'varchar(64)', 'label' => 'InvoiceNumber', 'enabled' => 1, 'visible' => 1, 'searchall' => 1, 'position' => 65),
 		'issue_date' => array('type' => 'date', 'label' => 'IssueDate', 'enabled' => 1, 'visible' => -1, 'position' => 70),
@@ -87,6 +93,10 @@ class FacturationElectroniqueStaging extends CommonObject
 	public $xml_ecm_file_id;
 	public $supplier_vat;
 	public $supplier_name;
+	public $supplier_address;
+	public $supplier_zip;
+	public $supplier_town;
+	public $supplier_country_code;
 	public $customer_vat;
 	public $invoice_number;
 	public $issue_date;
@@ -285,6 +295,46 @@ class FacturationElectroniqueStaging extends CommonObject
 		$this->validated_at = dol_now();
 
 		return $this->update($user);
+	}
+
+	/**
+	 * Recherche une facture fournisseur Dolibarr déjà existante avec la même référence
+	 * fournisseur que celle qui serait utilisée par un brouillon créé depuis cet
+	 * enregistrement (voir card.php, action 'create_draft'), et si possible le même tiers
+	 * via la TVA. Sert à éviter de créer un doublon quand la facture a déjà été saisie à
+	 * la main dans Dolibarr avant que Docclibarr ne la reçoive (cas réel rencontré le
+	 * 2026-09-07), utilisée aussi bien avant validation (masquer le bouton "créer un
+	 * brouillon", afficher un lien à la place) qu'à titre d'indice dans list.php.
+	 *
+	 * SQL brut plutôt qu'une méthode CommonObject, même raison que fetchAll() ci-dessus.
+	 *
+	 * @return int|null Id de la facture fournisseur existante, null si aucune
+	 */
+	public function findExistingSupplierInvoiceId()
+	{
+		$refSupplier = $this->payment_ref_raw !== null ? $this->payment_ref_raw : $this->invoice_number;
+		if (empty($refSupplier)) {
+			return null;
+		}
+
+		$sql = "SELECT f.rowid FROM ".MAIN_DB_PREFIX."facture_fourn as f";
+		if (!empty($this->supplier_vat)) {
+			$sql .= " INNER JOIN ".MAIN_DB_PREFIX."societe as s ON s.rowid = f.fk_soc";
+		}
+		$sql .= " WHERE f.ref_supplier = '".$this->db->escape($refSupplier)."'";
+		if (!empty($this->supplier_vat)) {
+			$sql .= " AND s.tva_intra = '".$this->db->escape($this->supplier_vat)."'";
+		}
+		$sql .= $this->db->plimit(1);
+
+		$resql = $this->db->query($sql);
+		if (!$resql || $this->db->num_rows($resql) === 0) {
+			return null;
+		}
+
+		$obj = $this->db->fetch_object($resql);
+
+		return (int) $obj->rowid;
 	}
 
 	/**

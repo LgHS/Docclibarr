@@ -220,6 +220,10 @@ class IngestionWorker
 		$staging->document_type = $data['document_type'];
 		$staging->supplier_vat = $data['supplier_vat'];
 		$staging->supplier_name = $data['supplier_name'];
+		$staging->supplier_address = $data['supplier_address'];
+		$staging->supplier_zip = $data['supplier_zip'];
+		$staging->supplier_town = $data['supplier_town'];
+		$staging->supplier_country_code = $data['supplier_country_code'];
 		$staging->customer_vat = $data['customer_vat'];
 		$staging->invoice_number = $data['invoice_number'];
 		$staging->issue_date = $data['issue_date'];

@@ -36,6 +36,12 @@ if (!$res) {
 
 require_once __DIR__.'/class/facturationelectroniquestaging.class.php';
 
+// Vérifié avec file_exists() avant require_once, même précaution que card.php (un chemin
+// Dolibarr incorrect est un échec fatal PHP non rattrapable).
+if (file_exists(DOL_DOCUMENT_ROOT.'/fourn/class/fournisseur.facture.class.php')) {
+	require_once DOL_DOCUMENT_ROOT.'/fourn/class/fournisseur.facture.class.php';
+}
+
 global $langs, $user, $conf, $db;
 
 $langs->loadLangs(array('docclibarr@docclibarr'));
@@ -155,6 +161,7 @@ print '<td class="right">'.$langs->trans("DocclibarrAmountTTC").'</td>';
 print '<td>'.$langs->trans("DocclibarrOriginStatus").'</td>';
 print '<td>'.$langs->trans("DocclibarrMatchStatus").'</td>';
 print '<td>'.$langs->trans("DocclibarrMatchConfidence").'</td>';
+print '<td>'.$langs->trans("DocclibarrLinkedInvoice").'</td>';
 print '<td></td>';
 print '</tr>';
 
@@ -180,6 +187,40 @@ if (is_array($records) && count($records) > 0) {
 		print '<td>'.($record->origin_verified ? img_picto('', 'tick').' '.$langs->trans("DocclibarrOriginVerified") : img_warning().' '.$langs->trans("DocclibarrOriginQuarantine")).'</td>';
 		print '<td>'.$statusLabel.'</td>';
 		print '<td>'.$confidenceLabel.'</td>';
+
+		// Facture Dolibarr liée : soit déjà validée/rattachée (matched_object_id, voir
+		// card.php), soit pas encore validée mais une facture avec la même référence
+		// fournisseur existe déjà (voir FacturationElectroniqueStaging::findExistingSupplierInvoiceId(),
+		// même lien affiché dans les deux cas plutôt que de ne le montrer qu'une fois
+		// validé : sans ça, aucun moyen de repérer un doublon potentiel depuis la liste
+		// avant d'ouvrir la fiche).
+		print '<td>';
+		$listLinkedInvoiceId = null;
+		if ($record->matched_object_type === 'invoice_supplier' && !empty($record->matched_object_id)) {
+			$listLinkedInvoiceId = $record->matched_object_id;
+		} else {
+			$listLinkedInvoiceId = $record->findExistingSupplierInvoiceId();
+		}
+
+		if ($listLinkedInvoiceId !== null && class_exists('FactureFournisseur')) {
+			$linkedInvoice = new FactureFournisseur($db);
+			if ($linkedInvoice->fetch($listLinkedInvoiceId) > 0) {
+				$linkedInvoiceStatusLabel = method_exists($linkedInvoice, 'getLibStatut') ? $linkedInvoice->getLibStatut(3) : '';
+				// Repli si ->ref ressort vide après fetch() (rencontré en conditions réelles
+				// sur cette instance, cause exacte non identifiée) : jamais un lien sans texte.
+				$linkedInvoiceRefDisplay = !empty($linkedInvoice->ref) ? $linkedInvoice->ref : (!empty($linkedInvoice->ref_supplier) ? $linkedInvoice->ref_supplier : '#'.$linkedInvoice->id);
+				print '<a href="'.dol_buildpath('/fourn/facture/card.php', 1).'?id='.((int) $linkedInvoice->id).'">'.dol_escape_htmltag($linkedInvoiceRefDisplay).'</a>';
+				if ($linkedInvoiceStatusLabel !== '') {
+					print ' '.$linkedInvoiceStatusLabel;
+				}
+			} else {
+				print '-';
+			}
+		} else {
+			print '-';
+		}
+		print '</td>';
+
 		$rowProcessed = in_array($record->match_status, array(
 			FacturationElectroniqueStaging::STATUS_VALIDATED,
 			FacturationElectroniqueStaging::STATUS_REJECTED,
@@ -216,7 +257,7 @@ if (is_array($records) && count($records) > 0) {
 		print '</tr>';
 	}
 } else {
-	print '<tr><td colspan="8">'.$langs->trans("None").'</td></tr>';
+	print '<tr><td colspan="9">'.$langs->trans("None").'</td></tr>';
 }
 
 print '</table>';

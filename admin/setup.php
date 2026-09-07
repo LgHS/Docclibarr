@@ -99,9 +99,14 @@ if ($action === 'test_connection') {
 		$testConnectionDebug = $result;
 
 		if ($result['success']) {
-			setEventMessages(sprintf($langs->trans("DocclibarrTestConnectionSuccess"), $result['email'], $result['messagesTotal']), null);
+			// Paramètres passés directement à trans(), jamais via sprintf() sur son résultat :
+			// Dolibarr substitue lui-même les %s de la chaîne de langue avec ses propres
+			// paramètres (vides par défaut si on ne les passe pas ici), donc un sprintf() après
+			// coup ne voit plus jamais de %s à remplacer et affiche un trou. Bug réel rencontré
+			// le 2026-09-07 sur cette instance (voir card.php pour le même correctif).
+			setEventMessages($langs->trans("DocclibarrTestConnectionSuccess", $result['email'], $result['messagesTotal']), null);
 		} else {
-			setEventMessages(sprintf($langs->trans("DocclibarrTestConnectionFailure"), $result['error']), null, 'errors');
+			setEventMessages($langs->trans("DocclibarrTestConnectionFailure", $result['error']), null, 'errors');
 		}
 	}
 }

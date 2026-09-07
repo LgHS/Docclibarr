@@ -43,6 +43,12 @@ class UblInvoiceParserTest extends TestCase
 			.'<cac:AccountingSupplierParty><cac:Party>'
 			.'<cbc:EndpointID schemeID="9925">BE0123456789</cbc:EndpointID>'
 			.'<cac:PartyName><cbc:Name>ACME Fournitures SA</cbc:Name></cac:PartyName>'
+			.'<cac:PostalAddress>'
+			.'<cbc:StreetName>Rue de la Fictive 12</cbc:StreetName>'
+			.'<cbc:CityName>Liège</cbc:CityName>'
+			.'<cbc:PostalZone>4000</cbc:PostalZone>'
+			.'<cac:Country><cbc:IdentificationCode>BE</cbc:IdentificationCode></cac:Country>'
+			.'</cac:PostalAddress>'
 			.'<cac:PartyTaxScheme><cbc:CompanyID>BE0123456789</cbc:CompanyID></cac:PartyTaxScheme>'
 			.'</cac:Party></cac:AccountingSupplierParty>'
 			.'<cac:AccountingCustomerParty><cac:Party>'
@@ -101,6 +107,10 @@ class UblInvoiceParserTest extends TestCase
 		$this->assertSame('+++111/2222/33333+++', $data['payment_ref_raw']);
 		$this->assertSame('111222233333', $data['payment_ref_normalized']);
 		$this->assertSame('BE00123412341234', $data['payee_iban']);
+		$this->assertSame('Rue de la Fictive 12', $data['supplier_address']);
+		$this->assertSame('4000', $data['supplier_zip']);
+		$this->assertSame('Liège', $data['supplier_town']);
+		$this->assertSame('BE', $data['supplier_country_code']);
 	}
 
 	/**
@@ -188,6 +198,12 @@ class UblInvoiceParserTest extends TestCase
 		$this->assertNull($data['payment_ref_normalized']);
 		$this->assertNull($data['payee_iban']);
 		$this->assertSame('BE0234567890', $data['supplier_vat']);
+		// Bloc cac:PostalAddress absent (optionnel du standard, rencontré sur pièce réelle) :
+		// chaque champ d'adresse doit rester null plutôt que planter le parsing.
+		$this->assertNull($data['supplier_address']);
+		$this->assertNull($data['supplier_zip']);
+		$this->assertNull($data['supplier_town']);
+		$this->assertNull($data['supplier_country_code']);
 	}
 
 	public function testNormalizePaymentRefKeepsOnlyDigits()
