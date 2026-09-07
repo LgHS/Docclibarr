@@ -250,6 +250,164 @@ function docclibarr_delete_directory_recursive($dir)
 	return $count;
 }
 
+// Rattrapage pour les entrées déjà validées AVANT l'ajout de la copie des documents dans
+// le dossier natif de la facture (voir FacturationElectroniqueStaging::relinkEcmFiles(),
+// 2026-09-07) : ce correctif ne s'applique qu'au moment de la validation, jamais
+// rétroactivement. Rejoue relinkEcmFiles() sur toutes les entrées déjà validées ;
+// sans danger de le lancer plusieurs fois, la copie de fichier est idempotente (un fichier
+// déjà copié n'est jamais retenté).
+$testBackfillDocumentsDebug = null;
+
+if ($action === 'backfill_documents') {
+	if (!$user->admin) {
+		accessforbidden();
+	}
+	try {
+		require_once __DIR__.'/../class/facturationelectroniquestaging.class.php';
+		$backfillStaging = new FacturationElectroniqueStaging($db);
+		$backfillRecords = $backfillStaging->fetchAll('DESC', 'email_received_at', 0, 0, array('match_status' => FacturationElectroniqueStaging::STATUS_VALIDATED));
+
+		$backfillProcessedCount = 0;
+		$backfillSkippedCount = 0;
+		// Détail par entrée traitée (voir FacturationElectroniqueStaging::$lastAttachDocumentsDebug) :
+		// la version précédente de ce bouton ne remontait aucun détail, impossible de savoir
+		// pourquoi la copie échouait, rencontré en conditions réelles le 2026-09-07.
+		$backfillDetails = array();
+		if (is_array($backfillRecords)) {
+			foreach ($backfillRecords as $backfillRecord) {
+				if ($backfillRecord->matched_object_type !== 'invoice_supplier' || empty($backfillRecord->matched_object_id)) {
+					$backfillSkippedCount++;
+					continue;
+				}
+				$backfillRecord->relinkEcmFiles($user, $backfillRecord->matched_object_type, $backfillRecord->matched_object_id);
+				$backfillDetails['staging#'.$backfillRecord->rowid.' -> facture#'.$backfillRecord->matched_object_id] = $backfillRecord->lastAttachDocumentsDebug;
+				$backfillProcessedCount++;
+			}
+		}
+
+		$testBackfillDocumentsDebug = array(
+			'total_validated' => is_array($backfillRecords) ? count($backfillRecords) : $backfillRecords,
+			'processed' => $backfillProcessedCount,
+			'skipped_not_invoice' => $backfillSkippedCount,
+			'details' => $backfillDetails,
+		);
+		setEventMessages("Rattrapage terminé, voir le détail ci-dessous", null);
+	} catch (\Throwable $e) {
+		$testBackfillDocumentsDebug = array(
+			'fatal_error' => get_class($e).' : '.$e->getMessage(),
+			'file' => $e->getFile(),
+			'line' => $e->getLine(),
+		);
+		setEventMessages("Erreur pendant le rattrapage, voir le détail ci-dessous", null, 'errors');
+	}
+}
+
+// Diagnostic du dossier documentaire d'une facture fournisseur, sans dépendre d'un accès
+// SSH/FTP au serveur : affiche tout depuis le navigateur (valeurs $conf résolues, ce que
+// dol_dir_list() trouve réellement dans chaque dossier candidat, ce que la base connaît en
+// ecm_files). Ajouté le 2026-09-07 : la copie de documents (voir
+// FacturationElectroniqueStaging::attachDocumentsToSupplierInvoiceFolder()) place bien un
+// fichier + une fiche ECM confirmés existants, mais l'onglet "Documents joints" de la
+// facture reste vide sur cette instance, cause encore inconnue. Ce diagnostic sert à voir
+// enfin quel dossier Dolibarr utilise réellement, plutôt que de continuer à deviner.
+$testDocFolderDebug = null;
+
+if ($action === 'test_doc_folder') {
+	if (!$user->admin) {
+		accessforbidden();
+	}
+	$testInvoiceId = (int) GETPOST('test_invoice_id', 'int');
+	if ($testInvoiceId <= 0) {
+		setEventMessages("Id de facture manquant ou invalide", null, 'errors');
+	} else {
+		try {
+			require_once DOL_DOCUMENT_ROOT.'/fourn/class/fournisseur.facture.class.php';
+			require_once DOL_DOCUMENT_ROOT.'/core/lib/files.lib.php';
+
+			$testDocFolderDebug = array();
+
+			$testDocFolderDebug['conf_dir_output'] = $conf->fournisseur->facture->dir_output ?? '(vide/non défini)';
+			$testDocFolderDebug['conf_multidir_output_entity'] = $conf->fournisseur->facture->multidir_output[$conf->entity] ?? '(vide/non défini)';
+			$testDocFolderDebug['conf_entity'] = $conf->entity;
+
+			$testInvoice = new FactureFournisseur($db);
+			$testFetchResult = $testInvoice->fetch($testInvoiceId);
+			$testDocFolderDebug['fetch_result'] = $testFetchResult;
+
+			if ($testFetchResult > 0) {
+				$testDocFolderDebug['invoice_ref'] = $testInvoice->ref;
+				$testDocFolderDebug['invoice_id'] = $testInvoice->id;
+
+				// get_exdir() : fonction cœur Dolibarr qui calcule le sous-découpage
+				// numérique du dossier documentaire (ex: "3/1/"), trouvé le 2026-09-07 en
+				// comparant avec une fiche créée par un upload natif Dolibarr. Testé avec
+				// plusieurs valeurs de $modulepart plausibles pour confirmer laquelle donne
+				// le bon résultat, avant de généraliser dans attachDocumentsToSupplierInvoiceFolder().
+				require_once DOL_DOCUMENT_ROOT.'/core/lib/files.lib.php';
+				$testDocFolderDebug['get_exdir_facture_fourn'] = function_exists('get_exdir') ? get_exdir($testInvoice->id, 2, 0, 0, $testInvoice, 'facture_fourn') : '(fonction absente)';
+				$testDocFolderDebug['get_exdir_invoice_supplier'] = function_exists('get_exdir') ? get_exdir($testInvoice->id, 2, 0, 0, $testInvoice, 'invoice_supplier') : '(fonction absente)';
+
+				// Tous les dossiers candidats plausibles, testés un par un : la convention
+				// exacte utilisée par le cœur Dolibarr pour ce module n'a pas pu être vérifiée
+				// contre cette instance (voir l'avertissement en tête de card.php).
+				$candidateDirs = array();
+				if (!empty($conf->fournisseur->facture->dir_output)) {
+					$candidateDirs['dir_output/ref'] = $conf->fournisseur->facture->dir_output.'/'.dol_sanitizeFileName($testInvoice->ref);
+					$candidateDirs['dir_output (sans sous-dossier)'] = $conf->fournisseur->facture->dir_output;
+					if (!empty($testDocFolderDebug['get_exdir_facture_fourn'])) {
+						$candidateDirs['dir_output/get_exdir(facture_fourn)/ref'] = $conf->fournisseur->facture->dir_output.'/'.$testDocFolderDebug['get_exdir_facture_fourn'].dol_sanitizeFileName($testInvoice->ref);
+					}
+				}
+				if (!empty($conf->fournisseur->facture->multidir_output[$conf->entity])) {
+					$candidateDirs['multidir_output/ref'] = $conf->fournisseur->facture->multidir_output[$conf->entity].'/'.dol_sanitizeFileName($testInvoice->ref);
+				}
+
+				$testDocFolderDebug['candidate_dirs'] = array();
+				foreach ($candidateDirs as $label => $dir) {
+					$entry = array('path' => $dir, 'is_dir' => is_dir($dir));
+					if (is_dir($dir) && function_exists('dol_dir_list')) {
+						$filesFound = dol_dir_list($dir, 'files', 0);
+						$entry['files_found'] = is_array($filesFound) ? array_column($filesFound, 'name') : $filesFound;
+					}
+					$testDocFolderDebug['candidate_dirs'][$label] = $entry;
+				}
+
+				// Toutes les colonnes, et filtré sur le DOSSIER (filepath) plutôt que sur
+				// src_object_type/src_object_id : ce sont justement les champs que remplit
+				// MON code, un upload natif Dolibarr (bouton "Fichiers joints" de la facture)
+				// ne les remplit peut-être pas du tout, ou pas pareil. Comparer toutes les
+				// colonnes des deux à la fois est le seul moyen de voir ce qui diffère
+				// vraiment, plutôt que de deviner quel champ regarder.
+				// filepath = 'fournisseur/facture/<ref>' OU 'fournisseur/facture' tout court
+				// (sans sous-dossier, voir plus haut) OU filename contenant le nom de fichier
+				// test uploadé à la main via Dolibarr, pour être sûr de l'attraper quel que
+				// soit l'endroit réel où Dolibarr l'a rangé.
+				$sqlEcm = "SELECT * FROM ".MAIN_DB_PREFIX."ecm_files";
+				$sqlEcm .= " WHERE filepath = '".$db->escape('fournisseur/facture/'.$testInvoice->ref)."'";
+				$sqlEcm .= " OR filepath = '".$db->escape('fournisseur/facture')."'";
+				$sqlEcm .= " OR filename LIKE '".$db->escape($testInvoice->ref)."%'";
+				$resqlEcm = $db->query($sqlEcm);
+				$ecmRows = array();
+				if ($resqlEcm) {
+					while ($objEcm = $db->fetch_object($resqlEcm)) {
+						$ecmRows[] = (array) $objEcm;
+					}
+				}
+				$testDocFolderDebug['ecm_files_rows_in_invoice_folder'] = $ecmRows;
+			}
+
+			setEventMessages("Diagnostic terminé, voir le détail ci-dessous", null);
+		} catch (\Throwable $e) {
+			$testDocFolderDebug = array(
+				'fatal_error' => get_class($e).' : '.$e->getMessage(),
+				'file' => $e->getFile(),
+				'line' => $e->getLine(),
+			);
+			setEventMessages("Erreur pendant le diagnostic, voir le détail ci-dessous", null, 'errors');
+		}
+	}
+}
+
 $testFlushDebug = null;
 
 if ($action === 'flush_test_data') {
@@ -372,6 +530,42 @@ if ($testIngestionDebug !== null) {
 	print '<b>Détail du dernier test d\'ingestion :</b>';
 	print '<pre style="white-space:pre-wrap;word-break:break-all;background:#f5f5f5;padding:10px;border:1px solid #ccc;">';
 	print dol_escape_htmltag(print_r($testIngestionDebug, true));
+	print '</pre>';
+	print '</div>';
+}
+
+// Rattrapage documents (voir action=backfill_documents ci-dessus) : copie le PDF/XML dans
+// le dossier natif de la facture pour les entrées validées avant que ce correctif existe.
+print '<form method="POST" action="'.$_SERVER["PHP_SELF"].'">';
+print '<input type="hidden" name="token" value="'.newToken().'">';
+print '<input type="hidden" name="action" value="backfill_documents">';
+print '<div class="center marginTopOnly"><input type="submit" class="button" value="Recopier les documents des entrées déjà validées"></div>';
+print '</form>';
+
+if ($testBackfillDocumentsDebug !== null) {
+	print '<div class="marginTopOnly">';
+	print '<b>Détail du dernier rattrapage :</b>';
+	print '<pre style="white-space:pre-wrap;word-break:break-all;background:#f5f5f5;padding:10px;border:1px solid #ccc;">';
+	print dol_escape_htmltag(print_r($testBackfillDocumentsDebug, true));
+	print '</pre>';
+	print '</div>';
+}
+
+// Diagnostic dossier documents (voir action=test_doc_folder ci-dessus) : pas besoin
+// d'accès SSH/FTP, tout s'affiche depuis le navigateur.
+print '<form method="POST" action="'.$_SERVER["PHP_SELF"].'" class="marginTopOnly">';
+print '<input type="hidden" name="token" value="'.newToken().'">';
+print '<input type="hidden" name="action" value="test_doc_folder">';
+print '<div class="center">Id facture fournisseur Dolibarr à diagnostiquer : ';
+print '<input type="text" name="test_invoice_id" size="6" value="'.dol_escape_htmltag(GETPOST('test_invoice_id', 'int')).'"> ';
+print '<input type="submit" class="button" value="Diagnostiquer le dossier documents"></div>';
+print '</form>';
+
+if ($testDocFolderDebug !== null) {
+	print '<div class="marginTopOnly">';
+	print '<b>Détail du diagnostic :</b>';
+	print '<pre style="white-space:pre-wrap;word-break:break-all;background:#f5f5f5;padding:10px;border:1px solid #ccc;">';
+	print dol_escape_htmltag(print_r($testDocFolderDebug, true));
 	print '</pre>';
 	print '</div>';
 }
