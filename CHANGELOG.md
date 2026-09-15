@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.0 (2026-09-15)
+
+- **Nouvelle action "Créer un avoir fournisseur"** sur la fiche détail d'une note de crédit, à côté de "Rattacher manuellement". Jusqu'ici une note de crédit ne pouvait être QUE rattachée manuellement à une facture déjà existante dans Dolibarr, en supposant qu'elle corrige toujours une facture précise. Cas réel rencontré : une note de crédit peut être un crédit générique sur le compte fournisseur (ex: remboursement partiel après résiliation d'un contrat), sans facture précise à corriger, situation où aucune action n'était possible jusqu'ici. Crée un avoir fournisseur Dolibarr autonome (`FactureFournisseur::TYPE_CREDIT_NOTE`), sans facture source obligatoire (Dolibarr l'accepte nativement), pré-rempli avec les infos du XML. Même dédoublonnage que pour un brouillon de facture.
+
 ## 0.6.3 (2026-09-15)
 
 - Bug corrigé : le bouton "Créer le tiers fournisseur à partir du XML" était masqué pour une note de crédit, imbriqué par erreur dans la même condition que "Créer un brouillon" (qui elle n'a effectivement pas de sens pour une note de crédit). Sorti de cette condition : créer le tiers reste utile même pour une note de crédit, pour pouvoir ensuite rattacher manuellement une future facture/avoir de ce fournisseur.

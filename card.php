@@ -20,12 +20,14 @@
  * toutes soumises à une confirmation humaine explicite (voir SPEC.md section 8 et 12,
  * rien n'est jamais appliqué automatiquement, y compris niveau 1) : valider la
  * proposition telle quelle, rattacher manuellement un autre objet, créer le tiers
- * fournisseur à partir du XML, créer un brouillon de facture fournisseur, ou rejeter
- * avec motif.
+ * fournisseur à partir du XML, créer un brouillon de facture fournisseur (ou un avoir
+ * fournisseur autonome pour une note de crédit sans facture source), ou rejeter avec motif.
  *
  * AVERTISSEMENT : la création de facture fournisseur (FactureFournisseur::create()), la
- * création de tiers (Societe::create()), le re-rattachement des documents ECM à l'objet
- * validé et la copie du PDF/XML dans le dossier documentaire natif de la facture (voir
+ * création d'avoir fournisseur (FactureFournisseur::TYPE_CREDIT_NOTE, voir
+ * FacturationElectroniqueStaging::createCreditNote()), la création de tiers
+ * (Societe::create()), le re-rattachement des documents ECM à l'objet validé et la copie
+ * du PDF/XML dans le dossier documentaire natif de la facture (voir
  * FacturationElectroniqueStaging::attachDocumentsToSupplierInvoiceFolder()) n'ont pas pu
  * être vérifiés contre une instance Dolibarr réelle, voir SPEC.md section 14 (couche 3).
  * À tester prioritairement avec des tiers et montants factices avant tout usage réel.
@@ -162,6 +164,34 @@ if ($action === 'validate_proposal' && !$alreadyProcessed) {
 			// FacturationElectroniqueStaging::createDraftInvoice().
 			$newInvoiceId = $staging->createDraftInvoice($user, $thirdParty->id);
 			if ($newInvoiceId <= 0) {
+				setEventMessages(implode(' ; ', $staging->errors), null, 'errors');
+			} else {
+				setEventMessages($langs->trans("RecordSaved"), null);
+			}
+		}
+	}
+} elseif ($action === 'create_credit_note' && !$alreadyProcessed) {
+	if (!$user->rights->docclibarr->validate) {
+		accessforbidden();
+	}
+
+	$duplicateCreditNoteId = $staging->findExistingSupplierInvoiceId();
+
+	if ($staging->document_type !== 'credit_note') {
+		// Défense en profondeur : le bouton est déjà masqué hors note de crédit, mais on
+		// refuse aussi l'action côté serveur si elle est soumise quand même.
+		setEventMessages("Impossible de créer un avoir depuis une facture normale", null, 'errors');
+	} elseif ($duplicateCreditNoteId !== null) {
+		setEventMessages($langs->trans("DocclibarrDraftAlreadyExistsError"), null, 'errors');
+	} else {
+		$thirdPartyId = (int) GETPOST('third_party_id', 'int');
+		$thirdParty = new Societe($db);
+
+		if ($thirdPartyId <= 0 || $thirdParty->fetch($thirdPartyId) <= 0) {
+			setEventMessages($langs->trans("DocclibarrCreateDraftMissingThirdParty"), null, 'errors');
+		} else {
+			$newCreditNoteId = $staging->createCreditNote($user, $thirdParty->id);
+			if ($newCreditNoteId <= 0) {
 				setEventMessages(implode(' ; ', $staging->errors), null, 'errors');
 			} else {
 				setEventMessages($langs->trans("RecordSaved"), null);
@@ -532,6 +562,44 @@ if (!$alreadyProcessed && $user->rights->docclibarr->validate) {
 			// créé (une facture fournisseur).
 			print $form->select_company($preselectedThirdPartyId, 'third_party_id', 's.fournisseur=1', 1, 0, 0, array(), 0, 'minwidth300');
 
+			print ' <input type="submit" class="button" value="'.$langs->trans("DocclibarrCreate").'">';
+			print '</form>';
+		}
+
+		print '</div>';
+	} else {
+		// Action 2 (variante note de crédit) : créer un avoir fournisseur autonome, pour le
+		// cas où la note de crédit est un crédit générique sur le compte fournisseur plutôt
+		// que la correction d'une facture précise (ex: remboursement partiel après
+		// résiliation d'un contrat, cas réel rencontré le 2026-09-15). Contrairement au
+		// brouillon de facture, aucune facture source n'est requise (Dolibarr l'accepte
+		// nativement, voir FacturationElectroniqueStaging::createCreditNote()). Si la note
+		// de crédit corrige au contraire une facture précise déjà dans Dolibarr, "Rattacher
+		// manuellement" ci-dessous reste la bonne action, pas celle-ci.
+		print '<div class="marginTopOnly"><h3>'.$langs->trans("DocclibarrCreateCreditNote").'</h3>';
+		print '<p class="opacitymedium">'.$langs->trans("DocclibarrCreateCreditNoteHelp").'</p>';
+
+		// Même dédoublonnage que pour un brouillon de facture : si un document avec cette
+		// référence existe déjà (facture ou avoir), ne pas en recréer un autre.
+		$duplicateCreditNoteForDisplay = $staging->findExistingSupplierInvoiceId();
+
+		if ($duplicateCreditNoteForDisplay !== null) {
+			$duplicateCreditNote = new FactureFournisseur($db);
+			if ($duplicateCreditNote->fetch($duplicateCreditNoteForDisplay) > 0) {
+				$duplicateCreditNoteStatusLabel = method_exists($duplicateCreditNote, 'getLibStatut') ? $duplicateCreditNote->getLibStatut(1) : '';
+				$duplicateCreditNoteRefDisplay = !empty($duplicateCreditNote->ref) ? $duplicateCreditNote->ref : (!empty($duplicateCreditNote->ref_supplier) ? $duplicateCreditNote->ref_supplier : '#'.$duplicateCreditNote->id);
+				$duplicateCreditNoteLink = '<a href="'.dol_buildpath('/fourn/facture/card.php', 1).'?id='.((int) $duplicateCreditNote->id).'">'.dol_escape_htmltag($duplicateCreditNoteRefDisplay).'</a>';
+				if ($duplicateCreditNoteStatusLabel !== '') {
+					$duplicateCreditNoteLink .= ' - '.$duplicateCreditNoteStatusLabel;
+				}
+				print '<p>'.$langs->trans("DocclibarrDraftAlreadyExists", $duplicateCreditNoteLink).'</p>';
+			}
+		} else {
+			print '<form method="POST" action="'.$_SERVER["PHP_SELF"].'?id='.$id.'">';
+			print '<input type="hidden" name="token" value="'.newToken().'">';
+			print '<input type="hidden" name="action" value="create_credit_note">';
+			print $langs->trans("DocclibarrThirdPartyId").' ';
+			print $form->select_company($preselectedThirdPartyId, 'third_party_id', 's.fournisseur=1', 1, 0, 0, array(), 0, 'minwidth300');
 			print ' <input type="submit" class="button" value="'.$langs->trans("DocclibarrCreate").'">';
 			print '</form>';
 		}

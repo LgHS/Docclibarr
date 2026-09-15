@@ -450,6 +450,64 @@ class FacturationElectroniqueStaging extends CommonObject
 	}
 
 	/**
+	 * Crée un avoir fournisseur autonome (FactureFournisseur::TYPE_CREDIT_NOTE) pour le
+	 * tiers donné, marque cet enregistrement validé, et re-rattache les documents ECM.
+	 * Ajouté le 2026-09-15 : jusqu'ici une note de crédit ne pouvait être QUE rattachée
+	 * manuellement à une facture déjà existante (voir SPEC.md section 6), en supposant
+	 * qu'elle corrige toujours une facture précise. Cas réel rencontré : une note de
+	 * crédit peut être un crédit générique sur le compte fournisseur (ex: remboursement
+	 * partiel après résiliation d'un contrat), sans facture source à désigner. Dolibarr
+	 * accepte ce cas nativement (`fk_facture_source` reste vide/null), voir
+	 * fourn/class/fournisseur.facture.class.php::create().
+	 *
+	 * @param User $user
+	 * @param int  $thirdPartyId Id du tiers Dolibarr, déjà résolu et vérifié par l'appelant
+	 * @return int Id de l'avoir créé, <0 si erreur (voir $this->errors)
+	 */
+	public function createCreditNote(User $user, $thirdPartyId)
+	{
+		require_once DOL_DOCUMENT_ROOT.'/fourn/class/fournisseur.facture.class.php';
+
+		$newCreditNote = new FactureFournisseur($this->db);
+		// Le type doit être posé AVANT create() : addline() s'appuie dessus pour rendre les
+		// montants négatifs elle-même (les montants passés à addline() restent positifs,
+		// voir plus bas, jamais mis en négatif à la main ici).
+		$newCreditNote->type = FactureFournisseur::TYPE_CREDIT_NOTE;
+		$newCreditNote->socid = $thirdPartyId;
+		$newCreditNote->ref_supplier = $this->payment_ref_raw !== null ? $this->payment_ref_raw : $this->invoice_number;
+		$newCreditNote->date = $this->issue_date !== null ? strtotime($this->issue_date) : dol_now();
+		$newCreditNote->label = "Note de crédit ".$this->supplier_name." n°".$this->invoice_number;
+
+		$newCreditNoteId = $newCreditNote->create($user);
+		if ($newCreditNoteId <= 0) {
+			$this->errors = $newCreditNote->errors;
+			return -1;
+		}
+
+		// Même logique de ligne unique que createDraftInvoice() (voir son commentaire) :
+		// une seule ligne HT + taux de TVA déduit de HT/TTC, montant positif (Dolibarr le
+		// rend négatif lui-même via TYPE_CREDIT_NOTE, voir plus haut).
+		$vatRate = 0;
+		if (!empty($this->amount_ht) && $this->amount_ttc !== null) {
+			$vatRate = round((($this->amount_ttc / $this->amount_ht) - 1) * 100, 2);
+		}
+		$lineDesc = $this->invoice_number !== null ? "Note de crédit ".$this->invoice_number : $this->supplier_name;
+		$lineResult = $newCreditNote->addline($lineDesc, $this->amount_ht, $vatRate, 0, 0, 1);
+		if ($lineResult <= 0) {
+			$this->errors[] = "Avoir créé mais échec de l'ajout de la ligne : ".implode(' ; ', $newCreditNote->errors);
+		}
+
+		$result = $this->markValidated($user, 'invoice_supplier', $newCreditNoteId);
+		if ($result <= 0) {
+			// markValidated() a déjà rempli $this->errors dans ce cas.
+			return -1;
+		}
+		$this->relinkEcmFiles($user, 'invoice_supplier', $newCreditNoteId);
+
+		return $newCreditNoteId;
+	}
+
+	/**
 	 * Détermine ce qu'un clic unique "sûr" (le bouton vert de list.php) doit faire pour cet
 	 * enregistrement, sans jamais rien appliquer lui-même (uniquement calculé). Le clic sur
 	 * le bouton EST la confirmation humaine explicite exigée par SPEC.md section 8 et 12,
