@@ -479,6 +479,20 @@ if (!$alreadyProcessed && $user->rights->docclibarr->validate) {
 	}
 	print '</div>';
 
+	// Pré-sélection si un tiers existant correspond déjà à la TVA extraite du XML, calculée
+	// ici (avant le if isCreditNote ci-dessous) car utilisée à la fois par le formulaire de
+	// brouillon et par le bouton de création de tiers, ce dernier restant utile même pour
+	// une note de crédit (voir plus bas).
+	$preselectedThirdPartyId = 0;
+	if (!empty($staging->supplier_vat)) {
+		$sqlThirdParty = "SELECT rowid FROM ".MAIN_DB_PREFIX."societe WHERE tva_intra = '".$db->escape($staging->supplier_vat)."'";
+		$resqlThirdParty = $db->query($sqlThirdParty);
+		if ($resqlThirdParty && $db->num_rows($resqlThirdParty) > 0) {
+			$objThirdParty = $db->fetch_object($resqlThirdParty);
+			$preselectedThirdPartyId = (int) $objThirdParty->rowid;
+		}
+	}
+
 	// Action 2 : créer un brouillon (n'a pas de sens pour une note de crédit, qui annule
 	// une facture existante plutôt que d'en représenter une nouvelle, voir SPEC.md
 	// section 6 : seul le rattachement manuel à la facture originale s'applique dans ce cas).
@@ -514,38 +528,31 @@ if (!$alreadyProcessed && $user->rights->docclibarr->validate) {
 			print '<input type="hidden" name="action" value="create_draft">';
 			print $langs->trans("DocclibarrThirdPartyId").' ';
 
-			// Pré-sélection si un tiers existant correspond déjà à la TVA extraite du XML,
-			// simple confort, l'utilisateur reste libre de choisir un autre tiers dans la liste.
-			$preselectedThirdPartyId = 0;
-			if (!empty($staging->supplier_vat)) {
-				$sqlThirdParty = "SELECT rowid FROM ".MAIN_DB_PREFIX."societe WHERE tva_intra = '".$db->escape($staging->supplier_vat)."'";
-				$resqlThirdParty = $db->query($sqlThirdParty);
-				if ($resqlThirdParty && $db->num_rows($resqlThirdParty) > 0) {
-					$objThirdParty = $db->fetch_object($resqlThirdParty);
-					$preselectedThirdPartyId = (int) $objThirdParty->rowid;
-				}
-			}
-
 			// Filtré aux tiers marqués fournisseurs (s.fournisseur=1), cohérent avec l'objet
 			// créé (une facture fournisseur).
 			print $form->select_company($preselectedThirdPartyId, 'third_party_id', 's.fournisseur=1', 1, 0, 0, array(), 0, 'minwidth300');
 
 			print ' <input type="submit" class="button" value="'.$langs->trans("DocclibarrCreate").'">';
 			print '</form>';
-
-			// Créer directement le tiers fournisseur à partir des infos extraites du XML (nom +
-			// TVA), pour éviter l'aller-retour manuel dans le module Tiers avant de pouvoir créer
-			// le brouillon. Uniquement proposé si aucun tiers ne correspond déjà à cette TVA
-			// (voir $preselectedThirdPartyId ci-dessus), pour ne jamais créer de doublon.
-			if ($preselectedThirdPartyId <= 0 && !empty($staging->supplier_vat) && !empty($staging->supplier_name)) {
-				print '<form method="POST" action="'.$_SERVER["PHP_SELF"].'?id='.$id.'" class="marginTopOnly">';
-				print '<input type="hidden" name="token" value="'.newToken().'">';
-				print '<input type="hidden" name="action" value="create_third_party">';
-				print '<input type="submit" class="button" value="'.$langs->trans("DocclibarrCreateThirdParty").'">';
-				print '</form>';
-			}
 		}
 
+		print '</div>';
+	}
+
+	// Créer directement le tiers fournisseur à partir des infos extraites du XML (nom +
+	// TVA), pour éviter l'aller-retour manuel dans le module Tiers. Sorti du bloc
+	// "!$isCreditNote" ci-dessus le 2026-09-15 (bug réel signalé) : contrairement au
+	// brouillon, créer le tiers a du sens même pour une note de crédit (le tiers doit
+	// exister avant de pouvoir rattacher manuellement une future facture/avoir de ce
+	// fournisseur). Uniquement proposé si aucun tiers ne correspond déjà à cette TVA (voir
+	// $preselectedThirdPartyId ci-dessus), pour ne jamais créer de doublon.
+	if ($preselectedThirdPartyId <= 0 && !empty($staging->supplier_vat) && !empty($staging->supplier_name)) {
+		print '<div class="marginTopOnly">';
+		print '<form method="POST" action="'.$_SERVER["PHP_SELF"].'?id='.$id.'">';
+		print '<input type="hidden" name="token" value="'.newToken().'">';
+		print '<input type="hidden" name="action" value="create_third_party">';
+		print '<input type="submit" class="button" value="'.$langs->trans("DocclibarrCreateThirdParty").'">';
+		print '</form>';
 		print '</div>';
 	}
 

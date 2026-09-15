@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.6.3 (2026-09-15)
+
+- Bug corrigé : le bouton "Créer le tiers fournisseur à partir du XML" était masqué pour une note de crédit, imbriqué par erreur dans la même condition que "Créer un brouillon" (qui elle n'a effectivement pas de sens pour une note de crédit). Sorti de cette condition : créer le tiers reste utile même pour une note de crédit, pour pouvoir ensuite rattacher manuellement une future facture/avoir de ce fournisseur.
+
 ## 0.6.2 (2026-09-07)
 
 - Fiche détail : "Créer un brouillon de facture fournisseur" remonté avant "Rattacher manuellement" (cas le plus fréquent en premier).
