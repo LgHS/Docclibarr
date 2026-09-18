@@ -133,21 +133,55 @@ if ($listAction === 'quick_process') {
 	}
 }
 
+// Deux tableaux séparés plutôt qu'une seule liste avec filtre (demande explicite du
+// 2026-09-18) : "à traiter" (en attente, proposition automatique, non rapproché) toujours
+// affiché en entier, sans filtre, puisque tout doit y passer de toute façon ; "traité" (le
+// reste : validé, rejeté, en quarantaine) avec le filtre par statut existant, sur validé par
+// défaut au tout premier chargement de la page.
+//
+// isset($_GET['match_status']) plutôt que GETPOST(...) !== '' pour distinguer "aucun
+// paramètre dans l'URL" (première visite, filtre par défaut sur validé) de "paramètre
+// présent mais vide" (l'utilisateur a choisi "Tous" explicitement dans le menu) : les deux
+// cas renvoient '' via GETPOST, impossible de les différencier autrement.
 $statusFilter = GETPOST('match_status', 'alpha');
+if (!isset($_GET['match_status'])) {
+	$statusFilter = FacturationElectroniqueStaging::STATUS_VALIDATED;
+}
 
 $staging = new FacturationElectroniqueStaging($db);
 
-$filter = array();
+$todoStatuses = array(
+	FacturationElectroniqueStaging::STATUS_PENDING,
+	FacturationElectroniqueStaging::STATUS_AUTO_MATCHED,
+	FacturationElectroniqueStaging::STATUS_UNMATCHED,
+);
+
+$doneFilter = array();
 if ($statusFilter !== '') {
-	$filter['match_status'] = $statusFilter;
+	$doneFilter['match_status'] = $statusFilter;
+} else {
+	// "Tous" choisi explicitement dans le dropdown du tableau "traité" : ne doit PAS
+	// réintroduire les statuts déjà couverts par le tableau "à traiter" juste au-dessus
+	// (voir aussi le dropdown, qui ne les propose plus individuellement), sinon on
+	// dupliquerait ces lignes dans les deux tableaux à la fois.
+	$doneFilter['match_status'] = array(
+		FacturationElectroniqueStaging::STATUS_QUARANTINE,
+		FacturationElectroniqueStaging::STATUS_VALIDATED,
+		FacturationElectroniqueStaging::STATUS_REJECTED,
+	);
 }
+
+$todoFilter = array(
+	'match_status' => $todoStatuses,
+);
 
 // try/catch(\Throwable) : fetchAllCommon() (CommonObject) n'avait jamais pu être testée
 // contre une vraie instance jusqu'ici, contrairement au reste du pipeline d'ingestion.
 // Affiche l'erreur exacte au lieu d'un 500 générique si elle échoue, même filet de
 // sécurité déjà utile sur admin/setup.php.
 try {
-	$records = $staging->fetchAll('DESC', 'email_received_at', 0, 0, $filter);
+	$todoRecords = $staging->fetchAll('DESC', 'email_received_at', 0, 0, $todoFilter);
+	$doneRecords = $staging->fetchAll('DESC', 'email_received_at', 0, 0, $doneFilter);
 } catch (\Throwable $e) {
 	llxHeader('', $langs->trans("DocclibarrArea"));
 	print '<div class="error"><b>Erreur fatale : '.get_class($e).' : '.dol_escape_htmltag($e->getMessage()).'</b>';
@@ -183,20 +217,204 @@ $documentTypeLangKeys = array(
 	'credit_note' => 'DocclibarrDocumentTypeCreditNote',
 );
 
+/**
+ * En-tête de colonnes, identique pour les deux tableaux (à traiter / traité, voir plus
+ * bas). Extrait en fonction le 2026-09-18 pour ne pas dupliquer ces 9 colonnes deux fois.
+ *
+ * @param Translate $langs
+ */
+function docclibarr_print_list_header($langs)
+{
+	print '<tr class="liste_titre">';
+	print '<td>'.$langs->trans("DocclibarrDocumentType").'</td>';
+	print '<td>'.$langs->trans("DocclibarrSupplier").'</td>';
+	print '<td>'.$langs->trans("DocclibarrInvoiceNumber").'</td>';
+	print '<td class="right">'.$langs->trans("DocclibarrAmountTTC").'</td>';
+	print '<td>'.$langs->trans("DocclibarrOriginStatus").'</td>';
+	print '<td>'.$langs->trans("DocclibarrMatchStatus").'</td>';
+	print '<td>'.$langs->trans("DocclibarrMatchConfidence").'</td>';
+	print '<td>'.$langs->trans("DocclibarrLinkedInvoice").'</td>';
+	print '<td></td>';
+	print '</tr>';
+}
+
+/**
+ * Une ligne du tableau (une entrée de staging). Extrait en fonction le 2026-09-18, pour
+ * être appelée depuis les deux tableaux (à traiter / traité) sans dupliquer ce bloc, qui
+ * gère l'affichage complet d'une ligne : type, fournisseur, montant, origine, statut (avec
+ * motif de rejet en info-bulle), confiance, facture liée (avec alerte si le lien est
+ * cassé), et la colonne d'actions (fiche, ✓/✕ rapides, ↺ de réinitialisation).
+ *
+ * @param FacturationElectroniqueStaging $record
+ * @param DoliDB   $db
+ * @param Translate $langs
+ * @param User     $user
+ * @param Form|null $listForm
+ * @param array    $matchStatusLangKeys
+ * @param array    $matchConfidenceLangKeys
+ * @param array    $documentTypeLangKeys
+ */
+function docclibarr_print_list_row($record, $db, $langs, $user, $listForm, array $matchStatusLangKeys, array $matchConfidenceLangKeys, array $documentTypeLangKeys)
+{
+	$statusLabel = isset($matchStatusLangKeys[$record->match_status])
+		? $langs->trans($matchStatusLangKeys[$record->match_status])
+		: dol_escape_htmltag($record->match_status);
+
+	$confidenceLabel = isset($matchConfidenceLangKeys[$record->match_confidence])
+		? $langs->trans($matchConfidenceLangKeys[$record->match_confidence])
+		: $langs->trans("DocclibarrMatchConfidenceNone");
+
+	$documentTypeLabel = isset($documentTypeLangKeys[$record->document_type])
+		? $langs->trans($documentTypeLangKeys[$record->document_type])
+		: dol_escape_htmltag($record->document_type);
+
+	print '<tr class="oddeven">';
+	print '<td>'.$documentTypeLabel.'</td>';
+	print '<td>'.dol_escape_htmltag($record->supplier_name).'</td>';
+	print '<td>'.dol_escape_htmltag($record->invoice_number).'</td>';
+	print '<td class="right">'.($record->amount_ttc !== null ? price($record->amount_ttc) : '').'</td>';
+	print '<td>'.($record->origin_verified ? img_picto('', 'tick').' '.$langs->trans("DocclibarrOriginVerified") : img_warning().' '.$langs->trans("DocclibarrOriginQuarantine")).'</td>';
+	// Info-bulle stylée Dolibarr (Form::textwithpicto(), la même que sur les infobulles
+	// natives Dolibarr, ex: numéro de facture) avec le motif du rejet et son auteur,
+	// plutôt que le tooltip brut du navigateur (title="...", moins lisible et pas dans
+	// le style de Dolibarr, demande explicite du 2026-09-07). User est une classe cœur
+	// Dolibarr toujours chargée, pas besoin de require_once supplémentaire.
+	$statusTitle = '';
+	if ($record->match_status === FacturationElectroniqueStaging::STATUS_REJECTED) {
+		$statusTitleParts = array();
+		if (!empty($record->rejection_reason)) {
+			$statusTitleParts[] = '<b>'.$langs->trans("DocclibarrRejectionReason").'</b> : '.dol_escape_htmltag($record->rejection_reason);
+		}
+		if (!empty($record->validated_by)) {
+			$rejectedByUser = new User($db);
+			if ($rejectedByUser->fetch($record->validated_by) > 0 && method_exists($rejectedByUser, 'getFullName')) {
+				$statusTitleParts[] = '<b>'.$langs->trans("DocclibarrRejectedBy").'</b> : '.dol_escape_htmltag($rejectedByUser->getFullName($langs));
+			}
+		}
+		$statusTitle = implode('<br>', $statusTitleParts);
+	}
+	print '<td>'.($statusTitle !== '' && $listForm !== null ? $listForm->textwithpicto($statusLabel, $statusTitle) : $statusLabel).'</td>';
+	print '<td>'.$confidenceLabel.'</td>';
+
+	// Facture Dolibarr liée : soit déjà validée/rattachée (matched_object_id, voir
+	// card.php), soit pas encore validée mais une facture avec la même référence
+	// fournisseur existe déjà (voir FacturationElectroniqueStaging::findExistingSupplierInvoiceId(),
+	// même lien affiché dans les deux cas plutôt que de ne le montrer qu'une fois
+	// validé : sans ça, aucun moyen de repérer un doublon potentiel depuis la liste
+	// avant d'ouvrir la fiche).
+	print '<td>';
+	$listLinkedInvoiceId = null;
+	if ($record->matched_object_type === 'invoice_supplier' && !empty($record->matched_object_id)) {
+		$listLinkedInvoiceId = $record->matched_object_id;
+	} else {
+		$listLinkedInvoiceId = $record->findExistingSupplierInvoiceId();
+	}
+
+	// Lien cassé : entrée validée et rattachée à une facture qui n'existe plus (supprimée
+	// côté Dolibarr après coup, voir card.php action 'reset_broken_link'). Distingué du
+	// simple indice de doublon (findExistingSupplierInvoiceId(), pas encore validé) :
+	// seul le premier cas mérite une alerte, pas le second.
+	$listLinkedInvoiceBroken = false;
+
+	if ($listLinkedInvoiceId !== null && class_exists('FactureFournisseur')) {
+		$linkedInvoice = new FactureFournisseur($db);
+		if ($linkedInvoice->fetch($listLinkedInvoiceId) > 0) {
+			$linkedInvoiceStatusLabel = method_exists($linkedInvoice, 'getLibStatut') ? $linkedInvoice->getLibStatut(3) : '';
+			// Repli si ->ref ressort vide après fetch() (rencontré en conditions réelles
+			// sur cette instance, cause exacte non identifiée) : jamais un lien sans texte.
+			$linkedInvoiceRefDisplay = !empty($linkedInvoice->ref) ? $linkedInvoice->ref : (!empty($linkedInvoice->ref_supplier) ? $linkedInvoice->ref_supplier : '#'.$linkedInvoice->id);
+			print '<a href="'.dol_buildpath('/fourn/facture/card.php', 1).'?id='.((int) $linkedInvoice->id).'">'.dol_escape_htmltag($linkedInvoiceRefDisplay).'</a>';
+			if ($linkedInvoiceStatusLabel !== '') {
+				print ' '.$linkedInvoiceStatusLabel;
+			}
+		} elseif ($record->matched_object_type === 'invoice_supplier' && $record->match_status === FacturationElectroniqueStaging::STATUS_VALIDATED) {
+			$listLinkedInvoiceBroken = true;
+			print img_warning().' <span style="color:#a94442">'.$langs->trans("DocclibarrLinkedInvoiceNotFound", (string) $listLinkedInvoiceId).'</span>';
+		} else {
+			print '-';
+		}
+	} else {
+		print '-';
+	}
+	print '</td>';
+
+	$rowProcessed = in_array($record->match_status, array(
+		FacturationElectroniqueStaging::STATUS_VALIDATED,
+		FacturationElectroniqueStaging::STATUS_REJECTED,
+	), true);
+
+	print '<td class="nowraponall">';
+	print '<a href="'.dol_buildpath('/docclibarr/card.php', 1).'?id='.((int) $record->rowid).'">'.img_picto($langs->trans("Show"), 'view').'</a>';
+
+	if (!$rowProcessed && $user->rights->docclibarr->validate) {
+		// V vert : uniquement si resolveQuickAction() est sûr de ce qu'il faut faire
+		// (proposition automatique existante, ou un unique tiers non ambigu pour créer
+		// le brouillon directement). Dans tous les autres cas, pas de bouton ici : il
+		// faut ouvrir la fiche (bouton "oeil" ci-dessus, qui reste toujours affiché) pour
+		// rattacher manuellement, créer le tiers, ou choisir entre plusieurs candidats.
+		$quickAction = $record->resolveQuickAction();
+		if ($quickAction !== null) {
+			print ' <form method="POST" action="'.$_SERVER["PHP_SELF"].'" style="display:inline">';
+			print '<input type="hidden" name="token" value="'.newToken().'">';
+			print '<input type="hidden" name="action" value="quick_process">';
+			print '<input type="hidden" name="id" value="'.((int) $record->rowid).'">';
+			print '<button type="submit" class="docclibarr-quick-btn docclibarr-quick-validate" title="'.$langs->trans("DocclibarrValidate").'">✓</button>';
+			print '</form>';
+		}
+
+		// X rouge : toujours disponible (rejeter ne dépend d'aucune ambiguïté), ouvre la
+		// modale partagée plutôt qu'un champ texte par ligne (voir en haut de page).
+		print ' <button type="button" class="docclibarr-quick-btn docclibarr-quick-reject" title="'.$langs->trans("DocclibarrReject").'" onclick="docclibarrOpenRejectModal('.((int) $record->rowid).')">✕</button>';
+	}
+
+	// Volontairement en dehors du "!$rowProcessed" ci-dessus : cette entrée EST déjà
+	// traitée (validée), c'est justement ce cas-là (facture liée supprimée depuis) qui
+	// est traité ici. Voir card.php action 'reset_broken_link', même logique.
+	if ($listLinkedInvoiceBroken && $user->rights->docclibarr->validate) {
+		print ' <form method="POST" action="'.$_SERVER["PHP_SELF"].'" style="display:inline">';
+		print '<input type="hidden" name="token" value="'.newToken().'">';
+		print '<input type="hidden" name="action" value="quick_reset_broken_link">';
+		print '<input type="hidden" name="id" value="'.((int) $record->rowid).'">';
+		print '<button type="submit" class="docclibarr-quick-btn" style="background:#a94442" title="'.$langs->trans("DocclibarrResetBrokenLink").'">↺</button>';
+		print '</form>';
+	}
+
+	print '</td>';
+	print '</tr>';
+}
+
+/**
+ * Imprime un tableau complet (en-tête + lignes + ligne "aucune entrée" si vide). Extrait
+ * en fonction le 2026-09-18 pour ne pas dupliquer la structure <table> deux fois.
+ *
+ * @param array<int, FacturationElectroniqueStaging>|int $records
+ * @param DoliDB    $db
+ * @param Translate $langs
+ * @param User      $user
+ * @param Form|null $listForm
+ * @param array     $matchStatusLangKeys
+ * @param array     $matchConfidenceLangKeys
+ * @param array     $documentTypeLangKeys
+ */
+function docclibarr_print_list_table($records, $db, $langs, $user, $listForm, array $matchStatusLangKeys, array $matchConfidenceLangKeys, array $documentTypeLangKeys)
+{
+	print '<table class="liste centpercent docclibarr-list-table">';
+	docclibarr_print_list_header($langs);
+
+	if (is_array($records) && count($records) > 0) {
+		foreach ($records as $record) {
+			docclibarr_print_list_row($record, $db, $langs, $user, $listForm, $matchStatusLangKeys, $matchConfidenceLangKeys, $documentTypeLangKeys);
+		}
+	} else {
+		print '<tr><td colspan="9">'.$langs->trans("None").'</td></tr>';
+	}
+
+	print '</table>';
+}
+
 llxHeader('', $langs->trans("DocclibarrArea"));
 
 print load_fiche_titre($langs->trans("DocclibarrArea"), '', 'docclibarr@docclibarr');
-
-// Filtre par statut, voir SPEC.md section 11 : "à traiter, en quarantaine, validé, rejeté"
-print '<form method="GET" action="'.$_SERVER["PHP_SELF"].'">';
-print '<select name="match_status" onchange="this.form.submit()">';
-print '<option value="">'.$langs->trans("All").'</option>';
-foreach ($matchStatusLangKeys as $statusValue => $langKey) {
-	$selected = ($statusFilter === $statusValue) ? ' selected' : '';
-	print '<option value="'.$statusValue.'"'.$selected.'>'.$langs->trans($langKey).'</option>';
-}
-print '</select>';
-print '</form>';
 
 // Police réduite dans le tableau (demande explicite, la liste peut contenir beaucoup de
 // lignes) et boutons ronds vert/rouge à la place des boutons texte "Valider"/"Rejeter"
@@ -265,156 +483,35 @@ function docclibarrCloseRejectModal() {
 }
 </script>';
 
-print '<table class="liste centpercent docclibarr-list-table">';
-print '<tr class="liste_titre">';
-print '<td>'.$langs->trans("DocclibarrDocumentType").'</td>';
-print '<td>'.$langs->trans("DocclibarrSupplier").'</td>';
-print '<td>'.$langs->trans("DocclibarrInvoiceNumber").'</td>';
-print '<td class="right">'.$langs->trans("DocclibarrAmountTTC").'</td>';
-print '<td>'.$langs->trans("DocclibarrOriginStatus").'</td>';
-print '<td>'.$langs->trans("DocclibarrMatchStatus").'</td>';
-print '<td>'.$langs->trans("DocclibarrMatchConfidence").'</td>';
-print '<td>'.$langs->trans("DocclibarrLinkedInvoice").'</td>';
-print '<td></td>';
-print '</tr>';
-
-// Pour l'info-bulle stylée Dolibarr sur le motif de rejet (Form::textwithpicto()), voir
-// plus bas dans la boucle, plutôt que le tooltip brut du navigateur (title="...").
+// Pour l'info-bulle stylée Dolibarr sur le motif de rejet (Form::textwithpicto()), utilisée
+// dans docclibarr_print_list_row() ci-dessus.
 $listForm = class_exists('Form') ? new Form($db) : null;
 
-if (is_array($records) && count($records) > 0) {
-	foreach ($records as $record) {
-		$statusLabel = isset($matchStatusLangKeys[$record->match_status])
-			? $langs->trans($matchStatusLangKeys[$record->match_status])
-			: dol_escape_htmltag($record->match_status);
+// Tableau "à traiter" (demande explicite du 2026-09-18) : tout ce qui n'est ni validé ni
+// rejeté (en attente, proposition automatique, non rapproché), toujours affiché en entier,
+// sans filtre, puisque tout doit y passer de toute façon.
+print '<h3>'.$langs->trans("DocclibarrTodoTableTitle").'</h3>';
+docclibarr_print_list_table($todoRecords, $db, $langs, $user, $listForm, $matchStatusLangKeys, $matchConfidenceLangKeys, $documentTypeLangKeys);
 
-		$confidenceLabel = isset($matchConfidenceLangKeys[$record->match_confidence])
-			? $langs->trans($matchConfidenceLangKeys[$record->match_confidence])
-			: $langs->trans("DocclibarrMatchConfidenceNone");
+// Tableau "traité" : le reste (validé, rejeté, en quarantaine...), avec le filtre par
+// statut existant, sur validé par défaut au premier chargement de la page (voir plus haut).
+// Le dropdown n'offre plus les 3 statuts du tableau "à traiter" (en attente, proposition
+// automatique, non rapproché) : demande explicite du 2026-09-18, ils ont maintenant leur
+// propre tableau toujours affiché en entier juste au-dessus, les proposer ici aussi n'a
+// plus de sens et ne ferait que dupliquer ce qu'on voit déjà.
+$doneMatchStatusLangKeys = array_diff_key($matchStatusLangKeys, array_flip($todoStatuses));
 
-		$documentTypeLabel = isset($documentTypeLangKeys[$record->document_type])
-			? $langs->trans($documentTypeLangKeys[$record->document_type])
-			: dol_escape_htmltag($record->document_type);
-
-		print '<tr class="oddeven">';
-		print '<td>'.$documentTypeLabel.'</td>';
-		print '<td>'.dol_escape_htmltag($record->supplier_name).'</td>';
-		print '<td>'.dol_escape_htmltag($record->invoice_number).'</td>';
-		print '<td class="right">'.($record->amount_ttc !== null ? price($record->amount_ttc) : '').'</td>';
-		print '<td>'.($record->origin_verified ? img_picto('', 'tick').' '.$langs->trans("DocclibarrOriginVerified") : img_warning().' '.$langs->trans("DocclibarrOriginQuarantine")).'</td>';
-		// Info-bulle stylée Dolibarr (Form::textwithpicto(), la même que sur les infobulles
-		// natives Dolibarr, ex: numéro de facture) avec le motif du rejet et son auteur,
-		// plutôt que le tooltip brut du navigateur (title="...", moins lisible et pas dans
-		// le style de Dolibarr, demande explicite du 2026-09-07). User est une classe cœur
-		// Dolibarr toujours chargée, pas besoin de require_once supplémentaire.
-		$statusTitle = '';
-		if ($record->match_status === FacturationElectroniqueStaging::STATUS_REJECTED) {
-			$statusTitleParts = array();
-			if (!empty($record->rejection_reason)) {
-				$statusTitleParts[] = '<b>'.$langs->trans("DocclibarrRejectionReason").'</b> : '.dol_escape_htmltag($record->rejection_reason);
-			}
-			if (!empty($record->validated_by)) {
-				$rejectedByUser = new User($db);
-				if ($rejectedByUser->fetch($record->validated_by) > 0 && method_exists($rejectedByUser, 'getFullName')) {
-					$statusTitleParts[] = '<b>'.$langs->trans("DocclibarrRejectedBy").'</b> : '.dol_escape_htmltag($rejectedByUser->getFullName($langs));
-				}
-			}
-			$statusTitle = implode('<br>', $statusTitleParts);
-		}
-		print '<td>'.($statusTitle !== '' && $listForm !== null ? $listForm->textwithpicto($statusLabel, $statusTitle) : $statusLabel).'</td>';
-		print '<td>'.$confidenceLabel.'</td>';
-
-		// Facture Dolibarr liée : soit déjà validée/rattachée (matched_object_id, voir
-		// card.php), soit pas encore validée mais une facture avec la même référence
-		// fournisseur existe déjà (voir FacturationElectroniqueStaging::findExistingSupplierInvoiceId(),
-		// même lien affiché dans les deux cas plutôt que de ne le montrer qu'une fois
-		// validé : sans ça, aucun moyen de repérer un doublon potentiel depuis la liste
-		// avant d'ouvrir la fiche).
-		print '<td>';
-		$listLinkedInvoiceId = null;
-		if ($record->matched_object_type === 'invoice_supplier' && !empty($record->matched_object_id)) {
-			$listLinkedInvoiceId = $record->matched_object_id;
-		} else {
-			$listLinkedInvoiceId = $record->findExistingSupplierInvoiceId();
-		}
-
-		// Lien cassé : entrée validée et rattachée à une facture qui n'existe plus (supprimée
-		// côté Dolibarr après coup, voir card.php action 'reset_broken_link'). Distingué du
-		// simple indice de doublon (findExistingSupplierInvoiceId(), pas encore validé) :
-		// seul le premier cas mérite une alerte, pas le second.
-		$listLinkedInvoiceBroken = false;
-
-		if ($listLinkedInvoiceId !== null && class_exists('FactureFournisseur')) {
-			$linkedInvoice = new FactureFournisseur($db);
-			if ($linkedInvoice->fetch($listLinkedInvoiceId) > 0) {
-				$linkedInvoiceStatusLabel = method_exists($linkedInvoice, 'getLibStatut') ? $linkedInvoice->getLibStatut(3) : '';
-				// Repli si ->ref ressort vide après fetch() (rencontré en conditions réelles
-				// sur cette instance, cause exacte non identifiée) : jamais un lien sans texte.
-				$linkedInvoiceRefDisplay = !empty($linkedInvoice->ref) ? $linkedInvoice->ref : (!empty($linkedInvoice->ref_supplier) ? $linkedInvoice->ref_supplier : '#'.$linkedInvoice->id);
-				print '<a href="'.dol_buildpath('/fourn/facture/card.php', 1).'?id='.((int) $linkedInvoice->id).'">'.dol_escape_htmltag($linkedInvoiceRefDisplay).'</a>';
-				if ($linkedInvoiceStatusLabel !== '') {
-					print ' '.$linkedInvoiceStatusLabel;
-				}
-			} elseif ($record->matched_object_type === 'invoice_supplier' && $record->match_status === FacturationElectroniqueStaging::STATUS_VALIDATED) {
-				$listLinkedInvoiceBroken = true;
-				print img_warning().' <span style="color:#a94442">'.$langs->trans("DocclibarrLinkedInvoiceNotFound", (string) $listLinkedInvoiceId).'</span>';
-			} else {
-				print '-';
-			}
-		} else {
-			print '-';
-		}
-		print '</td>';
-
-		$rowProcessed = in_array($record->match_status, array(
-			FacturationElectroniqueStaging::STATUS_VALIDATED,
-			FacturationElectroniqueStaging::STATUS_REJECTED,
-		), true);
-
-		print '<td class="nowraponall">';
-		print '<a href="'.dol_buildpath('/docclibarr/card.php', 1).'?id='.((int) $record->rowid).'">'.img_picto($langs->trans("Show"), 'view').'</a>';
-
-		if (!$rowProcessed && $user->rights->docclibarr->validate) {
-			// V vert : uniquement si resolveQuickAction() est sûr de ce qu'il faut faire
-			// (proposition automatique existante, ou un unique tiers non ambigu pour créer
-			// le brouillon directement). Dans tous les autres cas, pas de bouton ici : il
-			// faut ouvrir la fiche (bouton "oeil" ci-dessus, qui reste toujours affiché) pour
-			// rattacher manuellement, créer le tiers, ou choisir entre plusieurs candidats.
-			$quickAction = $record->resolveQuickAction();
-			if ($quickAction !== null) {
-				print ' <form method="POST" action="'.$_SERVER["PHP_SELF"].'" style="display:inline">';
-				print '<input type="hidden" name="token" value="'.newToken().'">';
-				print '<input type="hidden" name="action" value="quick_process">';
-				print '<input type="hidden" name="id" value="'.((int) $record->rowid).'">';
-				print '<button type="submit" class="docclibarr-quick-btn docclibarr-quick-validate" title="'.$langs->trans("DocclibarrValidate").'">✓</button>';
-				print '</form>';
-			}
-
-			// X rouge : toujours disponible (rejeter ne dépend d'aucune ambiguïté), ouvre la
-			// modale partagée plutôt qu'un champ texte par ligne (voir en haut de page).
-			print ' <button type="button" class="docclibarr-quick-btn docclibarr-quick-reject" title="'.$langs->trans("DocclibarrReject").'" onclick="docclibarrOpenRejectModal('.((int) $record->rowid).')">✕</button>';
-		}
-
-		// Volontairement en dehors du "!$rowProcessed" ci-dessus : cette entrée EST déjà
-		// traitée (validée), c'est justement ce cas-là (facture liée supprimée depuis) qui
-		// est traité ici. Voir card.php action 'reset_broken_link', même logique.
-		if ($listLinkedInvoiceBroken && $user->rights->docclibarr->validate) {
-			print ' <form method="POST" action="'.$_SERVER["PHP_SELF"].'" style="display:inline">';
-			print '<input type="hidden" name="token" value="'.newToken().'">';
-			print '<input type="hidden" name="action" value="quick_reset_broken_link">';
-			print '<input type="hidden" name="id" value="'.((int) $record->rowid).'">';
-			print '<button type="submit" class="docclibarr-quick-btn" style="background:#a94442" title="'.$langs->trans("DocclibarrResetBrokenLink").'">↺</button>';
-			print '</form>';
-		}
-
-		print '</td>';
-		print '</tr>';
-	}
-} else {
-	print '<tr><td colspan="9">'.$langs->trans("None").'</td></tr>';
+print '<h3 class="marginTopOnly">'.$langs->trans("DocclibarrDoneTableTitle").'</h3>';
+print '<form method="GET" action="'.$_SERVER["PHP_SELF"].'">';
+print '<select name="match_status" onchange="this.form.submit()">';
+print '<option value="">'.$langs->trans("All").'</option>';
+foreach ($doneMatchStatusLangKeys as $statusValue => $langKey) {
+	$selected = ($statusFilter === $statusValue) ? ' selected' : '';
+	print '<option value="'.$statusValue.'"'.$selected.'>'.$langs->trans($langKey).'</option>';
 }
-
-print '</table>';
+print '</select>';
+print '</form>';
+docclibarr_print_list_table($doneRecords, $db, $langs, $user, $listForm, $matchStatusLangKeys, $matchConfidenceLangKeys, $documentTypeLangKeys);
 
 // Légende des statuts, repliée par défaut (voir <details>, natif HTML, pas de JS
 // nécessaire) pour ne pas encombrer la page : explique ce que veut dire chaque valeur du

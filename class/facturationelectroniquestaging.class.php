@@ -240,7 +240,11 @@ class FacturationElectroniqueStaging extends CommonObject
 	 *                            toujours un nom de colonne codé en dur côté appelant)
 	 * @param int    $limit      Limite (0 = pas de limite)
 	 * @param int    $offset     Offset
-	 * @param array  $filter     Filtres d'égalité, ex: array('match_status' => 'pending')
+	 * @param array  $filter     Filtres d'égalité, ex: array('match_status' => 'pending'),
+	 *                            ou d'appartenance si la valeur est un tableau, ex:
+	 *                            array('match_status' => array('pending', 'unmatched'))
+	 *                            (voir list.php, tableau "à traiter" filtré sur plusieurs
+	 *                            statuts à la fois, ajouté le 2026-09-18)
 	 * @param string $filtermode Mode de combinaison des filtres ('AND' ou 'OR')
 	 * @return array<int, self>|int Tableau d'objets, ou <0 si erreur
 	 */
@@ -256,7 +260,17 @@ class FacturationElectroniqueStaging extends CommonObject
 			if (!in_array($field, $fieldNames, true)) {
 				continue;
 			}
-			$where[] = $field." = '".$this->db->escape($value)."'";
+			if (is_array($value)) {
+				if (empty($value)) {
+					continue;
+				}
+				$escapedValues = array_map(function ($v) {
+					return "'".$this->db->escape($v)."'";
+				}, $value);
+				$where[] = $field." IN (".implode(', ', $escapedValues).")";
+			} else {
+				$where[] = $field." = '".$this->db->escape($value)."'";
+			}
 		}
 		if (!empty($where)) {
 			$sql .= " WHERE ".implode(' '.($filtermode === 'OR' ? 'OR' : 'AND').' ', $where);

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.2 (2026-09-18)
+
+- Le dropdown du tableau "Traité" ne propose plus les 3 statuts déjà couverts par le tableau "À traiter" (en attente, proposition automatique, non rapproché) : ils ont leur propre tableau juste au-dessus, les avoir aussi ici faisait doublon. "Tous" dans ce dropdown ne réintroduit plus ces 3 statuts non plus (limité à quarantaine/validé/rejeté).
+
+## 0.7.1 (2026-09-18)
+
+- **Liste réorganisée en deux tableaux** (demande explicite) : "À traiter" en premier (en attente, proposition automatique, non rapproché), toujours affiché en entier sans filtre puisque tout doit y passer de toute façon. "Traité" en dessous (validé, rejeté, en quarantaine), avec le filtre par statut existant, sur "Validé" par défaut au premier chargement de la page.
+- `FacturationElectroniqueStaging::fetchAll()` accepte maintenant un tableau de valeurs pour un même champ de filtre (clause SQL `IN`), utilisé pour le tableau "À traiter".
+- Refactor : en-tête de colonnes, ligne de tableau et tableau complet extraits en fonctions dans list.php (`docclibarr_print_list_header()`, `docclibarr_print_list_row()`, `docclibarr_print_list_table()`), pour ne pas dupliquer ce code entre les deux tableaux.
+
 ## 0.7.0 (2026-09-15)
 
 - **Nouvelle action "Créer un avoir fournisseur"** sur la fiche détail d'une note de crédit, à côté de "Rattacher manuellement". Jusqu'ici une note de crédit ne pouvait être QUE rattachée manuellement à une facture déjà existante dans Dolibarr, en supposant qu'elle corrige toujours une facture précise. Cas réel rencontré : une note de crédit peut être un crédit générique sur le compte fournisseur (ex: remboursement partiel après résiliation d'un contrat), sans facture précise à corriger, situation où aucune action n'était possible jusqu'ici. Crée un avoir fournisseur Dolibarr autonome (`FactureFournisseur::TYPE_CREDIT_NOTE`), sans facture source obligatoire (Dolibarr l'accepte nativement), pré-rempli avec les infos du XML. Même dédoublonnage que pour un brouillon de facture.
