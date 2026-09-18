@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.3 (2026-09-18)
+
+- Bouton "Forcer l'ingestion maintenant" ajouté en haut de la page de configuration, avant le formulaire des identifiants Gmail. Réutilise la même action que le bouton "Lancer un test d'ingestion manuel" existant plus bas, juste accessible sans avoir à descendre toute la page.
+
 ## 0.7.2 (2026-09-18)
 
 - Le dropdown du tableau "Traité" ne propose plus les 3 statuts déjà couverts par le tableau "À traiter" (en attente, proposition automatique, non rapproché) : ils ont leur propre tableau juste au-dessus, les avoir aussi ici faisait doublon. "Tous" dans ce dropdown ne réintroduit plus ces 3 statuts non plus (limité à quarantaine/validé/rejeté).

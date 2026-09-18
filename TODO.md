@@ -5,16 +5,16 @@ encore diagnostiqués). Contrairement au CHANGELOG.md, qui journalise ce qui a �
 ce fichier ne garde que ce qui reste à faire : un point traité doit être retiré d'ici et
 noté dans le CHANGELOG à la place.
 
-## Liste (list.php)
+## Sécurité
 
-- **Gérer factures traitées / pas encore traitées.** Aujourd'hui la liste affiche tout
-  en vrac (à traiter, en quarantaine, validé, rejeté) sans distinction visuelle forte ni
-  filtre par défaut. Redemandé le 2026-09-07 ; déjà noté après la toute première session
-  (2026-09-02/03) sans avoir été fait depuis. Pistes à trancher :
-  - Masquer par défaut les entrées déjà validées/rejetées (garder le filtre par statut
-    existant pour les faire réapparaître à la demande).
-  - Et/ou séparer visuellement en deux blocs (à traiter / déjà traité) plutôt qu'un
-    filtre qui cache une partie de la liste.
+- **Revoir les vérifications de droits sur les boutons d'admin/setup.php.** Constat du
+  2026-09-18 : toute la page est déjà protégée en bloc par `!$user->admin` tout en haut
+  (ligne 52), mais certaines actions (`backfill_documents`, `test_doc_folder`,
+  `flush_test_data`) revérifient quand même `$user->admin` individuellement, alors que
+  d'autres (`test_connection`, `test_ingestion`, `test_fetch_all`, `update`) ne le font
+  pas. Pas une faille (la garde en haut de page couvre tout le monde), mais une
+  incohérence : à trancher une bonne fois, soit retirer les vérifications redondantes
+  partout, soit les ajouter partout pour la défense en profondeur.
 
 ## Fiabilité
 
