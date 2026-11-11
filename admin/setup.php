@@ -470,6 +470,19 @@ if (empty($missingPaths)) {
 }
 print '</div>';
 
+// Bouton d'ingestion forcée en haut de page, avant le formulaire de configuration
+// (demande explicite du 2026-09-18) : réutilise exactement la même action que le bouton
+// "Lancer un test d'ingestion manuel" plus bas (voir action=test_ingestion), juste
+// accessible tout de suite sans avoir à descendre toute la page. Le résultat s'affiche
+// au même endroit que d'habitude, plus bas.
+print '<div class="marginTopOnly">';
+print '<form method="POST" action="'.$_SERVER["PHP_SELF"].'">';
+print '<input type="hidden" name="token" value="'.newToken().'">';
+print '<input type="hidden" name="action" value="test_ingestion">';
+print '<input type="submit" class="button" value="Forcer l\'ingestion maintenant">';
+print '</form>';
+print '</div>';
+
 print '<form method="POST" action="'.$_SERVER["PHP_SELF"].'">';
 print '<input type="hidden" name="token" value="'.newToken().'">';
 print '<input type="hidden" name="action" value="update">';
